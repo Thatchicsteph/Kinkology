@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
+from pymongo import ReturnDocument
 import bcrypt
 import jwt
 import pyotp
@@ -85,6 +86,50 @@ def qr_data_url(uri: str) -> str:
     buf = BytesIO()
     img.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+# ------------------------------------------------------------------
+# Brute-force lockout / rate limiting
+# ------------------------------------------------------------------
+MAX_ATTEMPTS = 5
+LOCKOUT_SECONDS = 15 * 60
+
+def client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+async def check_lockout(identifier: str):
+    doc = await db.login_attempts.find_one({"identifier": identifier})
+    if not doc:
+        return
+    locked_until = doc.get("locked_until", 0)
+    now = time.time()
+    if locked_until and locked_until > now:
+        retry = int(locked_until - now)
+        minutes = max(1, (retry + 59) // 60)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in {minutes} minute{'s' if minutes != 1 else ''}.",
+            headers={"Retry-After": str(retry)},
+        )
+    if locked_until and locked_until <= now:
+        await db.login_attempts.delete_one({"identifier": identifier})
+
+async def record_failure(identifier: str):
+    doc = await db.login_attempts.find_one_and_update(
+        {"identifier": identifier},
+        {"$inc": {"count": 1}, "$set": {"updated": time.time()}},
+        upsert=True, return_document=ReturnDocument.AFTER,
+    )
+    if doc.get("count", 0) >= MAX_ATTEMPTS:
+        await db.login_attempts.update_one(
+            {"identifier": identifier},
+            {"$set": {"locked_until": time.time() + LOCKOUT_SECONDS}},
+        )
+
+async def clear_attempts(identifier: str):
+    await db.login_attempts.delete_one({"identifier": identifier})
 
 def decode_token(token: str) -> dict:
     return jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
@@ -306,11 +351,15 @@ async def ticker_loop():
 # Auth routes
 # ------------------------------------------------------------------
 @api_router.post("/auth/login")
-async def login(body: LoginInput, response: Response):
+async def login(body: LoginInput, request: Request, response: Response):
     email = body.email.strip().lower()
+    ident = f"{client_ip(request)}:login:{email}"
+    await check_lockout(ident)
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
+        await record_failure(ident)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    await clear_attempts(ident)
     uid = str(user["_id"])
     if user.get("twofa_enabled"):
         return {"mfa_required": True, "mfa_token": create_mfa_token(uid, email)}
@@ -320,13 +369,15 @@ async def login(body: LoginInput, response: Response):
     return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", "Admin")}}
 
 @api_router.post("/auth/2fa/login")
-async def twofa_login(body: TwoFALogin, response: Response):
+async def twofa_login(body: TwoFALogin, request: Request, response: Response):
     try:
         payload = decode_token(body.mfa_token)
         if payload.get("type") != "mfa":
             raise ValueError()
     except Exception:
         raise HTTPException(status_code=401, detail="Your 2FA session expired. Please log in again.")
+    ident = f"{client_ip(request)}:2fa:{payload.get('email','')}"
+    await check_lockout(ident)
     user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
     if not user or not user.get("twofa_enabled"):
         raise HTTPException(status_code=401, detail="Invalid 2FA state")
@@ -341,7 +392,9 @@ async def twofa_login(body: TwoFALogin, response: Response):
             await db.users.update_one({"_id": user["_id"]},
                                       {"$set": {"recovery_codes_hash": [x for x in hashes if x != h]}})
     if not ok:
+        await record_failure(ident)
         raise HTTPException(status_code=401, detail="Invalid code. Try again.")
+    await clear_attempts(ident)
     uid = str(user["_id"]); email = user["email"]
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
@@ -361,13 +414,17 @@ async def twofa_setup_start(user: dict = Depends(get_current_user)):
     return {"secret": secret, "otpauth_uri": uri, "qr_code_data_url": qr_data_url(uri)}
 
 @api_router.post("/auth/2fa/setup/verify")
-async def twofa_setup_verify(body: TwoFAVerify, user: dict = Depends(get_current_user)):
+async def twofa_setup_verify(body: TwoFAVerify, request: Request, user: dict = Depends(get_current_user)):
+    ident = f"{client_ip(request)}:2fa-setup:{user['email']}"
+    await check_lockout(ident)
     doc = await db.users.find_one({"email": user["email"]})
     secret = doc.get("twofa_pending_secret")
     if not secret:
         raise HTTPException(status_code=400, detail="No pending 2FA setup. Start again.")
     if not pyotp.TOTP(secret).verify(body.code.strip(), valid_window=1):
+        await record_failure(ident)
         raise HTTPException(status_code=400, detail="Invalid code — check your authenticator app and try again.")
+    await clear_attempts(ident)
     codes = make_recovery_codes(10)
     await db.users.update_one(
         {"email": user["email"]},
@@ -378,14 +435,18 @@ async def twofa_setup_verify(body: TwoFAVerify, user: dict = Depends(get_current
     return {"ok": True, "recovery_codes": codes}
 
 @api_router.post("/auth/2fa/disable")
-async def twofa_disable(body: TwoFAVerify, user: dict = Depends(get_current_user)):
+async def twofa_disable(body: TwoFAVerify, request: Request, user: dict = Depends(get_current_user)):
+    ident = f"{client_ip(request)}:2fa-disable:{user['email']}"
+    await check_lockout(ident)
     doc = await db.users.find_one({"email": user["email"]})
     secret = doc.get("totp_secret")
     ok = bool(secret) and pyotp.TOTP(secret).verify(body.code.strip(), valid_window=1)
     if not ok and hash_recovery(body.code) in doc.get("recovery_codes_hash", []):
         ok = True
     if not ok:
+        await record_failure(ident)
         raise HTTPException(status_code=400, detail="Invalid code. 2FA not disabled.")
+    await clear_attempts(ident)
     await db.users.update_one(
         {"email": user["email"]},
         {"$set": {"twofa_enabled": False},
@@ -596,6 +657,7 @@ app.add_middleware(
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.access_codes.create_index("code", unique=True)
+    await db.login_attempts.create_index("identifier", unique=True)
     hub.limits = await load_settings()
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@ossm.local").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "ossm-admin-2026")
