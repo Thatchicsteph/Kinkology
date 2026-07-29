@@ -35,6 +35,7 @@ Create a local, self-hostable web app that acts as a bridge from the internet to
 - **Advanced Auto Programs** (guest console): 6 automated motion routines (Wave, Build-Up, Tease/Edge, Depth Pulse, Surge, Random) that drive the device via timed commands; stop on manual touch/STOP/turn end. Frontend-driven.
 - **Owner Safety Limits**: min depth floor + max speed cap set in admin dashboard, stored in `settings` collection, ENFORCED SERVER-SIDE in the relay (`Hub.clamp_command`), surfaced live in the guest console (clamped sliders + lock notes). Verified 27/27 tests (iteration_3).
 - **Deployment/self-host support**: added `websockets`+`wsproto` to requirements (uvicorn WS support), `Caddyfile` for single-origin HTTPS reverse proxy.
+- **Admin 2FA (TOTP)**: authenticator-app two-factor for admin login with QR enrollment (pyotp + qrcode), 10 one-time backup recovery codes (stored hashed), two-step login (password → 6-digit/recovery), enable/disable in dashboard. Enforced via short-lived `mfa_token`. Verified 37/37 tests (iteration_4).
 
 ## Credentials
 See `/app/memory/test_credentials.md`. Admin: `admin@ossm.local` / `ossm-admin-2026`.
