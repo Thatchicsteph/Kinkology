@@ -36,6 +36,7 @@ Create a local, self-hostable web app that acts as a bridge from the internet to
 - **Owner Safety Limits**: min depth floor + max speed cap set in admin dashboard, stored in `settings` collection, ENFORCED SERVER-SIDE in the relay (`Hub.clamp_command`), surfaced live in the guest console (clamped sliders + lock notes). Verified 27/27 tests (iteration_3).
 - **Deployment/self-host support**: added `websockets`+`wsproto` to requirements (uvicorn WS support), `Caddyfile` for single-origin HTTPS reverse proxy.
 - **Admin 2FA (TOTP)**: authenticator-app two-factor for admin login with QR enrollment (pyotp + qrcode), 10 one-time backup recovery codes (stored hashed), two-step login (password → 6-digit/recovery), enable/disable in dashboard. Enforced via short-lived `mfa_token`. Verified 37/37 tests (iteration_4).
+- **Brute-force lockout / rate-limiting**: MongoDB `login_attempts` keyed by `ip:scope:email`, 5 failures → 15-min lockout (HTTP 429 + Retry-After), cleared on success. Applied to login, 2fa-login, 2fa-setup-verify, 2fa-disable. Verified 44/44 tests (iteration_5).
 
 ## Credentials
 See `/app/memory/test_credentials.md`. Admin: `admin@ossm.local` / `ossm-admin-2026`.
