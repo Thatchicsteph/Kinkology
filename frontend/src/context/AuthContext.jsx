@@ -23,6 +23,20 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
+    if (data.mfa_required) {
+      return { mfaRequired: true, mfaToken: data.mfa_token };
+    }
+    localStorage.setItem("ossm_token", data.token);
+    setUser(data.user);
+    return { mfaRequired: false, user: data.user };
+  };
+
+  const verify2fa = async ({ mfaToken, code, recoveryCode }) => {
+    const { data } = await api.post("/auth/2fa/login", {
+      mfa_token: mfaToken,
+      code: code || null,
+      recovery_code: recoveryCode || null,
+    });
     localStorage.setItem("ossm_token", data.token);
     setUser(data.user);
     return data.user;
@@ -37,7 +51,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, login, verify2fa, logout }}>
       {children}
     </AuthContext.Provider>
   );

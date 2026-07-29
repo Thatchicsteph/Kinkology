@@ -15,6 +15,12 @@ from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 import bcrypt
 import jwt
+import pyotp
+import qrcode
+import base64
+import hashlib
+import hmac
+from io import BytesIO
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -63,6 +69,23 @@ def create_access_token(user_id: str, email: str) -> str:
                "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "access"}
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
+def create_mfa_token(user_id: str, email: str) -> str:
+    payload = {"sub": user_id, "email": email,
+               "exp": datetime.now(timezone.utc) + timedelta(minutes=5), "type": "mfa"}
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+
+def hash_recovery(code: str) -> str:
+    return hmac.new(get_jwt_secret().encode(), code.strip().upper().encode(), hashlib.sha256).hexdigest()
+
+def make_recovery_codes(n: int = 10):
+    return ["-".join(secrets.token_hex(2).upper() for _ in range(3)) for _ in range(n)]
+
+def qr_data_url(uri: str) -> str:
+    img = qrcode.make(uri)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
 def decode_token(token: str) -> dict:
     return jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
 
@@ -94,6 +117,14 @@ async def get_current_user(request: Request) -> dict:
 class LoginInput(BaseModel):
     email: str
     password: str
+
+class TwoFAVerify(BaseModel):
+    code: str
+
+class TwoFALogin(BaseModel):
+    mfa_token: str
+    code: Optional[str] = None
+    recovery_code: Optional[str] = None
 
 class CodeCreate(BaseModel):
     label: str = ""
@@ -281,10 +312,86 @@ async def login(body: LoginInput, response: Response):
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     uid = str(user["_id"])
+    if user.get("twofa_enabled"):
+        return {"mfa_required": True, "mfa_token": create_mfa_token(uid, email)}
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
                         samesite="none", max_age=604800, path="/")
     return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", "Admin")}}
+
+@api_router.post("/auth/2fa/login")
+async def twofa_login(body: TwoFALogin, response: Response):
+    try:
+        payload = decode_token(body.mfa_token)
+        if payload.get("type") != "mfa":
+            raise ValueError()
+    except Exception:
+        raise HTTPException(status_code=401, detail="Your 2FA session expired. Please log in again.")
+    user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+    if not user or not user.get("twofa_enabled"):
+        raise HTTPException(status_code=401, detail="Invalid 2FA state")
+    ok = False
+    if body.code:
+        ok = pyotp.TOTP(user["totp_secret"]).verify(body.code.strip(), valid_window=1)
+    elif body.recovery_code:
+        h = hash_recovery(body.recovery_code)
+        hashes = user.get("recovery_codes_hash", [])
+        if h in hashes:
+            ok = True
+            await db.users.update_one({"_id": user["_id"]},
+                                      {"$set": {"recovery_codes_hash": [x for x in hashes if x != h]}})
+    if not ok:
+        raise HTTPException(status_code=401, detail="Invalid code. Try again.")
+    uid = str(user["_id"]); email = user["email"]
+    token = create_access_token(uid, email)
+    response.set_cookie("access_token", token, httponly=True, secure=True,
+                        samesite="none", max_age=604800, path="/")
+    return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", "Admin")}}
+
+@api_router.get("/auth/2fa/status")
+async def twofa_status(user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"email": user["email"]})
+    return {"enabled": bool(doc.get("twofa_enabled"))}
+
+@api_router.post("/auth/2fa/setup/start")
+async def twofa_setup_start(user: dict = Depends(get_current_user)):
+    secret = pyotp.random_base32()
+    uri = pyotp.TOTP(secret).provisioning_uri(name=user["email"], issuer_name="OSSM Bridge")
+    await db.users.update_one({"email": user["email"]}, {"$set": {"twofa_pending_secret": secret}})
+    return {"secret": secret, "otpauth_uri": uri, "qr_code_data_url": qr_data_url(uri)}
+
+@api_router.post("/auth/2fa/setup/verify")
+async def twofa_setup_verify(body: TwoFAVerify, user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"email": user["email"]})
+    secret = doc.get("twofa_pending_secret")
+    if not secret:
+        raise HTTPException(status_code=400, detail="No pending 2FA setup. Start again.")
+    if not pyotp.TOTP(secret).verify(body.code.strip(), valid_window=1):
+        raise HTTPException(status_code=400, detail="Invalid code — check your authenticator app and try again.")
+    codes = make_recovery_codes(10)
+    await db.users.update_one(
+        {"email": user["email"]},
+        {"$set": {"totp_secret": secret, "twofa_enabled": True,
+                  "recovery_codes_hash": [hash_recovery(c) for c in codes]},
+         "$unset": {"twofa_pending_secret": ""}},
+    )
+    return {"ok": True, "recovery_codes": codes}
+
+@api_router.post("/auth/2fa/disable")
+async def twofa_disable(body: TwoFAVerify, user: dict = Depends(get_current_user)):
+    doc = await db.users.find_one({"email": user["email"]})
+    secret = doc.get("totp_secret")
+    ok = bool(secret) and pyotp.TOTP(secret).verify(body.code.strip(), valid_window=1)
+    if not ok and hash_recovery(body.code) in doc.get("recovery_codes_hash", []):
+        ok = True
+    if not ok:
+        raise HTTPException(status_code=400, detail="Invalid code. 2FA not disabled.")
+    await db.users.update_one(
+        {"email": user["email"]},
+        {"$set": {"twofa_enabled": False},
+         "$unset": {"totp_secret": "", "recovery_codes_hash": "", "twofa_pending_secret": ""}},
+    )
+    return {"ok": True}
 
 @api_router.post("/auth/logout")
 async def logout(response: Response):

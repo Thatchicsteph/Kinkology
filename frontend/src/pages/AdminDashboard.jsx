@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { useBleHost } from "@/hooks/useBleHost";
 import { ControlConsole } from "@/components/ControlConsole";
 import { LiveQueue } from "@/components/LiveQueue";
+import { TwoFactorPanel } from "@/components/TwoFactorPanel";
 import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
 import {
@@ -187,6 +188,7 @@ export default function AdminDashboard() {
 
         {/* Access codes */}
         <section className="space-y-6">
+          <TwoFactorPanel />
           <div className="hud-panel p-5 sm:p-6" data-testid="safety-limits-card">
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-2">
               <Sliders size={18} className="text-[var(--ossm-cyan)]" /> Safety Limits
