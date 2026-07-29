@@ -6,6 +6,19 @@ import { TimerDisplay } from "@/components/TimerDisplay";
 import { Radio, Loader2, XCircle, Clock, Users } from "lucide-react";
 import { toast } from "sonner";
 
+const Shell = ({ code, children }) => (
+  <div className="relative z-10 min-h-screen flex flex-col max-w-lg mx-auto px-5 py-6">
+    <header className="flex items-center justify-between mb-6">
+      <div className="flex items-center gap-2">
+        <Radio className="text-[var(--ossm-cyan)]" size={18} />
+        <span className="font-display font-black tracking-[0.2em] text-sm">OSSM BRIDGE</span>
+      </div>
+      <span className="font-mono-data text-xs text-[var(--ossm-muted)]">CODE {code}</span>
+    </header>
+    {children}
+  </div>
+);
+
 export default function GuestControl() {
   const { code } = useParams();
   const navigate = useNavigate();
@@ -53,22 +66,9 @@ export default function GuestControl() {
     }
   };
 
-  const Shell = ({ children }) => (
-    <div className="relative z-10 min-h-screen flex flex-col max-w-lg mx-auto px-5 py-6">
-      <header className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-2">
-          <Radio className="text-[var(--ossm-cyan)]" size={18} />
-          <span className="font-display font-black tracking-[0.2em] text-sm">OSSM BRIDGE</span>
-        </div>
-        <span className="font-mono-data text-xs text-[var(--ossm-muted)]">CODE {code}</span>
-      </header>
-      {children}
-    </div>
-  );
-
   if (phase === "checking" || phase === "connecting") {
     return (
-      <Shell>
+      <Shell code={code}>
         <div className="flex-1 flex flex-col items-center justify-center gap-4 text-[var(--ossm-text-2)]">
           <Loader2 className="animate-spin text-[var(--ossm-cyan)]" size={32} />
           <p className="font-mono-data text-sm">Connecting to the bridge…</p>
@@ -79,7 +79,7 @@ export default function GuestControl() {
 
   if (phase === "invalid") {
     return (
-      <Shell>
+      <Shell code={code}>
         <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center" data-testid="invalid-state">
           <XCircle className="text-[var(--ossm-danger)]" size={40} />
           <h2 className="font-display font-black uppercase tracking-[0.05em] text-xl">Code not valid</h2>
@@ -94,7 +94,7 @@ export default function GuestControl() {
 
   if (phase === "ended") {
     return (
-      <Shell>
+      <Shell code={code}>
         <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center" data-testid="ended-state">
           <Clock className="text-[var(--ossm-cyan)]" size={40} />
           <h2 className="font-display font-black uppercase tracking-[0.05em] text-xl">Session ended</h2>
@@ -108,7 +108,7 @@ export default function GuestControl() {
   if (phase === "waiting") {
     const pos = snap.you?.position ?? 0;
     return (
-      <Shell>
+      <Shell code={code}>
         <div className="flex-1 flex flex-col items-center justify-center gap-6 text-center" data-testid="waiting-state">
           <div className="hud-panel px-8 py-10 w-full">
             <Users className="text-[var(--ossm-cyan)] mx-auto" size={32} />
@@ -132,7 +132,7 @@ export default function GuestControl() {
 
   // active
   return (
-    <Shell>
+    <Shell code={code}>
       <div className="fade-up">
         <div className="hud-panel p-6 flex flex-col items-center">
           <TimerDisplay seconds={snap.you?.remaining_seconds ?? 0} />
