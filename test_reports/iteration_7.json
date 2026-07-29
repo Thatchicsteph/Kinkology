@@ -1,0 +1,16 @@
+{
+  "summary": "Regression smoke after removing unused 'emergentintegrations==0.2.0' from backend/requirements.txt. Confirmed no import references in server.py, backend boots cleanly, GET /api/ returns {message:'OSSM Bridge API'}, and the full existing pytest suite (47 tests across backend_test.py, test_twofa.py, test_lockout.py, test_overlay.py) passes 100%.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/backend/tests/test_twofa.py", "/app/backend/tests/test_lockout.py", "/app/backend/tests/test_overlay.py", "/app/test_reports/pytest/iteration_7_results.xml"],
+  "action_items": [],
+  "critical_code_review_comments": ["requirements.txt cleanup is clean - no lingering emergentintegrations references anywhere in backend code."],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (47/47)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Tests self-cleanup: 2FA disabled, access codes deleted, limits reset to {0,100}, login_attempts cleared.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 47 backend tests pass on iteration_7 after requirements.txt cleanup. Test suite covers auth (bcrypt+cookies+bearer), access codes CRUD/validate, session state/stop/skip, WebSocket relay/queue-promotion/expiry/clamp/invalid-code-drop, safety settings GET/PUT/reset, brute-force lockout (login+2FA setup+disable), 2FA full lifecycle (setup/verify/mfa-login/recovery/disable), and overlay REST+WS. No regressions detected.",
+  "rca of the issue": "N/A - preventive regression check only. The removed 'emergentintegrations==0.2.0' pkg was never imported in server.py (grep count = 0), so removal has zero functional impact. Prior local install failure was due to pip aborting on that internal package spec before reaching pyotp/qrcode; cleanup resolves it."
+}
