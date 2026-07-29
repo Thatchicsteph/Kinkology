@@ -37,6 +37,7 @@ Create a local, self-hostable web app that acts as a bridge from the internet to
 - **Deployment/self-host support**: added `websockets`+`wsproto` to requirements (uvicorn WS support), `Caddyfile` for single-origin HTTPS reverse proxy.
 - **Admin 2FA (TOTP)**: authenticator-app two-factor for admin login with QR enrollment (pyotp + qrcode), 10 one-time backup recovery codes (stored hashed), two-step login (password → 6-digit/recovery), enable/disable in dashboard. Enforced via short-lived `mfa_token`. Verified 37/37 tests (iteration_4).
 - **Brute-force lockout / rate-limiting**: MongoDB `login_attempts` keyed by `ip:scope:email`, 5 failures → 15-min lockout (HTTP 429 + Retry-After), cleared on success. Applied to login, 2fa-login, 2fa-setup-verify, 2fa-disable. Verified 44/44 tests (iteration_5).
+- **Live telemetry overlay** (`/overlay`, public, OBS-ready): backend tracks current speed/stroke/depth/sensation (post-clamp) + motion run time + session time, broadcast over public WS `/api/ws/overlay` (+ GET `/api/overlay/state`). Page renders rolling SVG sparklines + run/session timers + controller + status; `?transparent=1` for OBS. Dashboard has copy/open link card. Verified 47/47 tests (iteration_6).
 
 ## Credentials
 See `/app/memory/test_credentials.md`. Admin: `admin@ossm.local` / `ossm-admin-2026`.
