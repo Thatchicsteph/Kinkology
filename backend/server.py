@@ -99,6 +99,10 @@ class CodeCreate(BaseModel):
     label: str = ""
     minutes: int = Field(gt=0, le=1440)
 
+class SettingsInput(BaseModel):
+    min_depth: int = Field(ge=0, le=100)
+    max_speed: int = Field(ge=0, le=100)
+
 def gen_code() -> str:
     alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
     return "".join(secrets.choice(alphabet) for _ in range(6))
@@ -115,7 +119,20 @@ class Hub:
         self.active_start: Optional[float] = None
         self.active_remaining_start: int = 0
         self.device_state: str = ""
+        self.limits: dict = {"min_depth": 0, "max_speed": 100}
         self.lock = asyncio.Lock()
+
+    def clamp_command(self, cmd: str) -> str:
+        """Enforce owner safety limits (min depth floor, max speed cap)."""
+        m = re.match(r'^set:(depth|speed):(\d+)$', cmd)
+        if not m:
+            return cmd
+        kind, val = m.group(1), int(m.group(2))
+        if kind == "depth" and val < self.limits.get("min_depth", 0):
+            return f'set:depth:{self.limits["min_depth"]}'
+        if kind == "speed" and val > self.limits.get("max_speed", 100):
+            return f'set:speed:{self.limits["max_speed"]}'
+        return cmd
 
     def active_remaining(self) -> int:
         if self.active_id is None or self.active_start is None:
@@ -199,6 +216,7 @@ class Hub:
             return
         if not is_valid_command(cmd):
             return
+        cmd = self.clamp_command(cmd)
         await self.send_to_host({"type": "command", "cmd": cmd})
 
     def client_status(self, cid: str) -> dict:
@@ -224,6 +242,7 @@ class Hub:
             "active": {"label": active_label, "remaining_seconds": self.active_remaining()} if self.active_id else None,
             "queue": queue_view,
             "queue_length": len(self.queue),
+            "limits": self.limits,
         }
 
     async def broadcast(self):
@@ -348,6 +367,27 @@ async def validate_code(code: str):
     return {"valid": remaining > 0, "label": doc.get("label", ""), "remaining_seconds": remaining}
 
 # ------------------------------------------------------------------
+# Safety settings (owner-set limits enforced server-side)
+# ------------------------------------------------------------------
+async def load_settings() -> dict:
+    doc = await db.settings.find_one({"_id": "global"})
+    if not doc:
+        doc = {"_id": "global", "min_depth": 0, "max_speed": 100}
+        await db.settings.insert_one(doc)
+    return {"min_depth": int(doc.get("min_depth", 0)), "max_speed": int(doc.get("max_speed", 100))}
+
+@api_router.get("/settings")
+async def get_settings(user: dict = Depends(get_current_user)):
+    return await load_settings()
+
+@api_router.put("/settings")
+async def put_settings(body: SettingsInput, user: dict = Depends(get_current_user)):
+    data = {"min_depth": body.min_depth, "max_speed": body.max_speed}
+    await db.settings.update_one({"_id": "global"}, {"$set": data}, upsert=True)
+    hub.limits = data
+    return data
+
+# ------------------------------------------------------------------
 # Admin session control
 # ------------------------------------------------------------------
 @api_router.get("/session/state")
@@ -449,6 +489,7 @@ app.add_middleware(
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.access_codes.create_index("code", unique=True)
+    hub.limits = await load_settings()
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@ossm.local").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "ossm-admin-2026")
     existing = await db.users.find_one({"email": admin_email})

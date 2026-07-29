@@ -337,3 +337,91 @@ async def test_ws_rejects_invalid_code():
         msg = await asyncio.wait_for(ws.recv(), timeout=3)
         m = json.loads(msg)
         assert m.get("type") == "rejected"
+
+
+# ---------- Safety limits (settings) ----------
+class TestSettings:
+    def test_get_settings_requires_auth(self):
+        r = requests.get(f"{BASE_URL}/api/settings")
+        assert r.status_code == 401
+
+    def test_get_default_settings(self, api, auth):
+        r = api.get(f"{BASE_URL}/api/settings")
+        assert r.status_code == 200
+        d = r.json()
+        assert "min_depth" in d and "max_speed" in d
+        assert isinstance(d["min_depth"], int)
+        assert isinstance(d["max_speed"], int)
+
+    def test_put_settings_persists_and_reflects_in_session_state(self, api, auth):
+        r = api.put(f"{BASE_URL}/api/settings", json={"min_depth": 40, "max_speed": 70})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["min_depth"] == 40 and d["max_speed"] == 70
+
+        # GET reflects
+        r2 = api.get(f"{BASE_URL}/api/settings")
+        assert r2.json() == {"min_depth": 40, "max_speed": 70}
+
+        # session/state includes limits
+        r3 = api.get(f"{BASE_URL}/api/session/state")
+        assert r3.status_code == 200
+        assert r3.json().get("limits") == {"min_depth": 40, "max_speed": 70}
+
+    def test_put_settings_validation(self, api, auth):
+        r = api.put(f"{BASE_URL}/api/settings", json={"min_depth": -1, "max_speed": 50})
+        assert r.status_code == 422
+        r = api.put(f"{BASE_URL}/api/settings", json={"min_depth": 0, "max_speed": 150})
+        assert r.status_code == 422
+
+    def test_reset_settings(self, api, auth):
+        r = api.put(f"{BASE_URL}/api/settings", json={"min_depth": 0, "max_speed": 100})
+        assert r.status_code == 200
+        assert r.json() == {"min_depth": 0, "max_speed": 100}
+
+
+# ---------- WebSocket server-side limit clamping ----------
+@pytest.mark.asyncio
+async def test_ws_clamp_depth_and_speed(api, auth):
+    """With limits min_depth=40, max_speed=70:
+       set:depth:10 -> set:depth:40, set:depth:80 unchanged
+       set:speed:95 -> set:speed:70, set:speed:50 unchanged
+    """
+    # Set limits
+    r = api.put(f"{BASE_URL}/api/settings", json={"min_depth": 40, "max_speed": 70})
+    assert r.status_code == 200
+
+    code = await _create_code(api, auth, minutes=5, label="TEST_CLAMP")
+    token = auth["token"]
+    host_uri = f"{WS_BASE}/api/ws/host?token={token}"
+    ctrl_uri = f"{WS_BASE}/api/ws/control/{code['code']}"
+    try:
+        async with websockets.connect(host_uri) as host_ws:
+            await _recv_until(host_ws, lambda m: m.get("type") == "state", 3)
+            async with websockets.connect(ctrl_uri) as ctrl_ws:
+                got_active = await _recv_until(
+                    ctrl_ws,
+                    lambda m: m.get("type") == "state" and (m.get("you") or {}).get("status") == "active",
+                    5,
+                )
+                assert got_active is not None
+
+                cases = [
+                    ("set:depth:10", "set:depth:40"),   # clamped up
+                    ("set:depth:80", "set:depth:80"),   # unchanged
+                    ("set:speed:95", "set:speed:70"),   # clamped down
+                    ("set:speed:50", "set:speed:50"),   # unchanged
+                ]
+                for sent, expected in cases:
+                    await ctrl_ws.send(json.dumps({"type": "command", "cmd": sent}))
+                    relayed = await _recv_until(
+                        host_ws,
+                        lambda m: m.get("type") == "command",
+                        3,
+                    )
+                    assert relayed is not None, f"no relay for {sent}"
+                    assert relayed["cmd"] == expected, f"sent {sent} expected {expected} got {relayed['cmd']}"
+    finally:
+        await _cleanup_code(api, code["id"])
+        # Reset limits to defaults
+        api.put(f"{BASE_URL}/api/settings", json={"min_depth": 0, "max_speed": 100})

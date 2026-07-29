@@ -141,7 +141,7 @@ export default function GuestControl() {
           )}
         </div>
         <div className="hud-panel p-6 mt-4">
-          <ControlConsole onCommand={sendCommand} disabled={false} />
+          <ControlConsole onCommand={sendCommand} disabled={false} limits={snap.limits} />
         </div>
       </div>
     </Shell>

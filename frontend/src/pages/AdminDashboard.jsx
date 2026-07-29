@@ -34,6 +34,8 @@ export default function AdminDashboard() {
   const [label, setLabel] = useState("");
   const [minutes, setMinutes] = useState(10);
   const [showTest, setShowTest] = useState(false);
+  const [limits, setLimits] = useState({ min_depth: 0, max_speed: 100 });
+  const [savingLimits, setSavingLimits] = useState(false);
   const pollRef = useRef(null);
 
   const loadCodes = async () => {
@@ -42,10 +44,25 @@ export default function AdminDashboard() {
   const loadState = async () => {
     try { const { data } = await api.get("/session/state"); setState(data); } catch (e) {}
   };
+  const loadLimits = async () => {
+    try { const { data } = await api.get("/settings"); setLimits(data); } catch (e) {}
+  };
+  const saveLimits = async () => {
+    setSavingLimits(true);
+    try {
+      const { data } = await api.put("/settings", {
+        min_depth: Number(limits.min_depth), max_speed: Number(limits.max_speed),
+      });
+      setLimits(data);
+      toast.success("Safety limits saved — enforced for all guests");
+    } catch (e) { toast.error("Could not save limits"); }
+    finally { setSavingLimits(false); }
+  };
 
   useEffect(() => {
     loadCodes();
     loadState();
+    loadLimits();
     pollRef.current = setInterval(loadState, 1000);
     return () => clearInterval(pollRef.current);
     // eslint-disable-next-line
@@ -135,7 +152,7 @@ export default function AdminDashboard() {
         {ble.connected && showTest && (
           <div className="mt-6 pt-6 border-t border-[var(--ossm-overlay)] max-w-md" data-testid="owner-test-console">
             <p className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)] mb-4">OWNER TEST CONTROLS — DIRECT TO DEVICE</p>
-            <ControlConsole onCommand={ble.writeCommand} />
+            <ControlConsole onCommand={ble.writeCommand} limits={limits} />
           </div>
         )}
       </div>
@@ -170,6 +187,47 @@ export default function AdminDashboard() {
 
         {/* Access codes */}
         <section className="space-y-6">
+          <div className="hud-panel p-5 sm:p-6" data-testid="safety-limits-card">
+            <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-2">
+              <Sliders size={18} className="text-[var(--ossm-cyan)]" /> Safety Limits
+            </h2>
+            <p className="text-[var(--ossm-text-2)] text-sm mb-5">Enforced server-side for every guest. No one can exceed these.</p>
+            <div className="space-y-5">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)]">MINIMUM DEPTH</label>
+                  <span className="font-mono-data text-lg font-bold text-[var(--ossm-cyan)]" data-testid="limit-min-depth-value">{limits.min_depth}</span>
+                </div>
+                <input
+                  type="range" min={0} max={100} step={1} value={limits.min_depth}
+                  onChange={(e) => setLimits((l) => ({ ...l, min_depth: Number(e.target.value) }))}
+                  data-testid="limit-min-depth"
+                  className="w-full accent-[var(--ossm-cyan)]"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)]">MAXIMUM SPEED</label>
+                  <span className="font-mono-data text-lg font-bold text-[var(--ossm-danger)]" data-testid="limit-max-speed-value">{limits.max_speed}</span>
+                </div>
+                <input
+                  type="range" min={0} max={100} step={1} value={limits.max_speed}
+                  onChange={(e) => setLimits((l) => ({ ...l, max_speed: Number(e.target.value) }))}
+                  data-testid="limit-max-speed"
+                  className="w-full accent-[var(--ossm-danger)]"
+                />
+              </div>
+              <button
+                onClick={saveLimits}
+                disabled={savingLimits}
+                data-testid="save-limits-button"
+                className="w-full bg-[var(--ossm-cyan)] text-[var(--ossm-base)] font-display font-bold tracking-[0.1em] py-3 active:scale-95 transition-transform disabled:opacity-50"
+              >
+                {savingLimits ? "SAVING…" : "SAVE LIMITS"}
+              </button>
+            </div>
+          </div>
+
           <div className="hud-panel p-5 sm:p-6">
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-5">
               <Ticket size={18} className="text-[var(--ossm-cyan)]" /> New Access Code
