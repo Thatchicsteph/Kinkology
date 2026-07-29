@@ -32,6 +32,9 @@ Create a local, self-hostable web app that acts as a bridge from the internet to
 - Command relay with firmware-matching validation (invalid commands dropped). Verified.
 - Web Bluetooth host hook (`useBleHost`) with real UUIDs, command write, state notifications. (Requires physical device + compatible browser — cannot run in cloud/headless.)
 - UI: Landing (code entry), Admin login, Admin dashboard (device host panel + owner test console + live session monitor + code management), Guest control (waiting/active/ended/invalid states). Verified via screenshots.
+- **Advanced Auto Programs** (guest console): 6 automated motion routines (Wave, Build-Up, Tease/Edge, Depth Pulse, Surge, Random) that drive the device via timed commands; stop on manual touch/STOP/turn end. Frontend-driven.
+- **Owner Safety Limits**: min depth floor + max speed cap set in admin dashboard, stored in `settings` collection, ENFORCED SERVER-SIDE in the relay (`Hub.clamp_command`), surfaced live in the guest console (clamped sliders + lock notes). Verified 27/27 tests (iteration_3).
+- **Deployment/self-host support**: added `websockets`+`wsproto` to requirements (uvicorn WS support), `Caddyfile` for single-origin HTTPS reverse proxy.
 
 ## Credentials
 See `/app/memory/test_credentials.md`. Admin: `admin@ossm.local` / `ossm-admin-2026`.
