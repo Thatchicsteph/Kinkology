@@ -196,7 +196,47 @@ class Hub:
         self.active_remaining_start: int = 0
         self.device_state: str = ""
         self.limits: dict = {"min_depth": 0, "max_speed": 100}
+        self.overlay_ws: set = set()
+        self.telemetry: dict = {"speed": 0, "stroke": 0, "depth": 0, "sensation": 0}
+        self.motion_accum: float = 0.0
+        self.motion_start: Optional[float] = None
         self.lock = asyncio.Lock()
+
+    def _update_motion(self, speed: int):
+        now = time.monotonic()
+        if speed > 0 and self.motion_start is None:
+            self.motion_start = now
+        elif speed == 0 and self.motion_start is not None:
+            self.motion_accum += now - self.motion_start
+            self.motion_start = None
+
+    def reset_telemetry(self):
+        self.telemetry = {"speed": 0, "stroke": 0, "depth": 0, "sensation": 0}
+        self.motion_accum = 0.0
+        self.motion_start = None
+
+    def telemetry_frame(self) -> dict:
+        now = time.monotonic()
+        run = self.motion_accum + (now - self.motion_start if self.motion_start else 0)
+        session = int(now - self.active_start) if (self.active_id and self.active_start) else 0
+        label = self.clients[self.active_id]["label"] if (self.active_id and self.active_id in self.clients) else None
+        return {
+            "type": "telemetry",
+            "host_connected": self.host_ws is not None,
+            "controller": label,
+            "running": self.telemetry["speed"] > 0,
+            "run_seconds": int(run),
+            "session_seconds": session,
+            **self.telemetry,
+        }
+
+    async def push_telemetry(self):
+        frame = self.telemetry_frame()
+        for ws in list(self.overlay_ws):
+            try:
+                await ws.send_json(frame)
+            except Exception:
+                self.overlay_ws.discard(ws)
 
     def clamp_command(self, cmd: str) -> str:
         """Enforce owner safety limits (min depth floor, max speed cap)."""
@@ -250,6 +290,7 @@ class Hub:
             self.active_id = cid
             self.active_start = time.monotonic()
             self.active_remaining_start = remaining
+            self.reset_telemetry()
             break
 
     async def end_active(self, reason: str = "ended"):
@@ -272,6 +313,8 @@ class Hub:
         self.active_id = None
         self.active_start = None
         self.active_remaining_start = 0
+        self.reset_telemetry()
+        await self.push_telemetry()
 
     async def add_client(self, cid: str, ws: WebSocket, code: str, label: str):
         self.clients[cid] = {"ws": ws, "code": code, "label": label}
@@ -293,7 +336,13 @@ class Hub:
         if not is_valid_command(cmd):
             return
         cmd = self.clamp_command(cmd)
+        m = re.match(r'^set:(speed|stroke|depth|sensation):(\d+)$', cmd)
+        if m:
+            self.telemetry[m.group(1)] = int(m.group(2))
+            if m.group(1) == "speed":
+                self._update_motion(int(m.group(2)))
         await self.send_to_host({"type": "command", "cmd": cmd})
+        await self.push_telemetry()
 
     def client_status(self, cid: str) -> dict:
         if cid == self.active_id:
@@ -336,6 +385,7 @@ class Hub:
                 await self.end_active("time_up")
                 await self.promote()
             await self.broadcast()
+            await self.push_telemetry()
 
 hub = Hub()
 
@@ -638,6 +688,23 @@ async def ws_control(ws: WebSocket, code: str):
         async with hub.lock:
             await hub.remove_client(cid)
             await hub.broadcast()
+
+@app.websocket("/api/ws/overlay")
+async def ws_overlay(ws: WebSocket):
+    await ws.accept()
+    hub.overlay_ws.add(ws)
+    await hub._send(ws, hub.telemetry_frame())
+    try:
+        while True:
+            await ws.receive_text()
+    except Exception:
+        pass
+    finally:
+        hub.overlay_ws.discard(ws)
+
+@api_router.get("/overlay/state")
+async def overlay_state():
+    return hub.telemetry_frame()
 
 @api_router.get("/")
 async def root():

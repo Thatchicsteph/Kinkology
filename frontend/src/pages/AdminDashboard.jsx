@@ -188,6 +188,24 @@ export default function AdminDashboard() {
 
         {/* Access codes */}
         <section className="space-y-6">
+          <div className="hud-panel p-5 sm:p-6" data-testid="overlay-link-card">
+            <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-2">
+              <Activity size={18} className="text-[var(--ossm-cyan)]" /> Live Overlay
+            </h2>
+            <p className="text-[var(--ossm-text-2)] text-sm mb-4">Real-time graphs of run time, speed, depth, stroke &amp; sensation. Add as an OBS browser source or open on any screen.</p>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/overlay`); toast.success("Overlay link copied"); }} data-testid="copy-overlay-link"
+                className="flex items-center gap-1.5 border border-[var(--ossm-overlay)] px-3 py-2 font-mono-data text-xs hover:border-[var(--ossm-cyan)]/50 hover:text-[var(--ossm-cyan)] transition-colors">
+                <Copy size={13} /> COPY LINK
+              </button>
+              <a href="/overlay" target="_blank" rel="noreferrer" data-testid="open-overlay-link"
+                className="flex items-center gap-1.5 bg-[var(--ossm-cyan)] text-[var(--ossm-base)] px-3 py-2 font-display font-bold text-xs tracking-[0.1em] active:scale-95 transition-transform">
+                OPEN OVERLAY
+              </a>
+            </div>
+            <p className="font-mono-data text-[11px] text-[var(--ossm-muted)] mt-3">Tip: append <span className="text-[var(--ossm-text-2)]">?transparent=1</span> for a transparent OBS background.</p>
+          </div>
+
           <TwoFactorPanel />
           <div className="hud-panel p-5 sm:p-6" data-testid="safety-limits-card">
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-2">

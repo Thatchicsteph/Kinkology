@@ -6,6 +6,7 @@ import Landing from "@/pages/Landing";
 import AdminLogin from "@/pages/AdminLogin";
 import AdminDashboard from "@/pages/AdminDashboard";
 import GuestControl from "@/pages/GuestControl";
+import Overlay from "@/pages/Overlay";
 import { Loader2 } from "lucide-react";
 
 function ProtectedRoute({ children }) {
@@ -31,6 +32,7 @@ function App() {
           <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
           <Route path="/c/:code" element={<GuestControl />} />
+          <Route path="/overlay" element={<Overlay />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
