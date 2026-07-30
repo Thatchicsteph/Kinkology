@@ -7,6 +7,20 @@ const DEFAULTS = { restingBpm: 60, peakBpm: 150, minSpeed: 10, maxSpeed: 100, ra
 const MAXES = { restingBpm: 240, peakBpm: 240, minSpeed: 100, maxSpeed: 100, rampUp: 100, rampDown: 100 };
 const TICK_MS = 150;
 
+const PRESET_KEYS = ["restingBpm", "peakBpm", "minSpeed", "maxSpeed", "rampUp", "rampDown"];
+const PRESETS = {
+  Gentle:     { restingBpm: 60, peakBpm: 160, minSpeed: 5,  maxSpeed: 60,  rampUp: 12, rampDown: 40 },
+  Responsive: { restingBpm: 60, peakBpm: 150, minSpeed: 10, maxSpeed: 100, rampUp: 25, rampDown: 50 },
+  Intense:    { restingBpm: 70, peakBpm: 140, minSpeed: 30, maxSpeed: 100, rampUp: 60, rampDown: 60 },
+};
+
+function matchPreset(cfg) {
+  for (const [name, p] of Object.entries(PRESETS)) {
+    if (PRESET_KEYS.every((k) => Number(cfg[k]) === p[k])) return name;
+  }
+  return null;
+}
+
 function loadCfg() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORE_KEY));
@@ -33,6 +47,7 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   const ready = hr.connected && ble.connected;
   const overCutoff = cutoff > 0 && hr.connected && hr.bpm >= cutoff;
   const target = overCutoff ? 0 : bpmToSpeed(hr.bpm, cfg, maxCap);
+  const activePreset = matchPreset(cfg);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); }, [cfg]);
 
@@ -127,7 +142,27 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
           <span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${enabled ? "left-6" : "left-1"}`} />
         </button>
       </div>
-      <p className="text-[var(--ossm-text-2)] text-sm mb-4">Device speed ramps toward your live BPM. Always capped by your Max Speed limit.</p>
+      <p className="text-[var(--ossm-text-2)] text-sm mb-3">Device speed ramps toward your live BPM. Always capped by your Max Speed limit.</p>
+
+      <div className="flex gap-2 mb-4" data-testid="hr-sync-presets">
+        {Object.keys(PRESETS).map((name) => {
+          const active = activePreset === name;
+          return (
+            <button
+              key={name}
+              onClick={() => setCfg((c) => ({ ...c, ...PRESETS[name] }))}
+              data-testid={`hr-sync-preset-${name.toLowerCase()}`}
+              className={`flex-1 font-display text-xs tracking-[0.1em] py-2 border transition-colors ${
+                active
+                  ? "border-[var(--ossm-hr)] text-[var(--ossm-hr)] bg-[var(--ossm-hr)]/10"
+                  : "border-[var(--ossm-overlay)] text-[var(--ossm-text-2)] hover:border-[var(--ossm-hr)]/50 hover:text-[var(--ossm-hr)]"
+              }`}
+            >
+              {name.toUpperCase()}
+            </button>
+          );
+        })}
+      </div>
 
       <div className="grid grid-cols-2 gap-3 mb-3">
         <NumField label="RESTING BPM" testid="hr-sync-resting" value={cfg.restingBpm} onChange={(v) => setField("restingBpm", v)} />
