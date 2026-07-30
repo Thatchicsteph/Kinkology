@@ -23,13 +23,14 @@ export function bpmToSpeed(bpm, cfg, maxCap) {
   return Math.min(sp, Math.max(0, maxCap));
 }
 
-export function HeartRateSync({ hr, ble, maxCap }) {
+export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   const [cfg, setCfg] = useState(loadCfg);
   const [enabled, setEnabled] = useState(false);
   const lastSentRef = useRef(-1);
 
   const ready = hr.connected && ble.connected;
-  const target = bpmToSpeed(hr.bpm, cfg, maxCap);
+  const overCutoff = cutoff > 0 && hr.connected && hr.bpm >= cutoff;
+  const target = overCutoff ? 0 : bpmToSpeed(hr.bpm, cfg, maxCap);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); }, [cfg]);
 
@@ -109,6 +110,11 @@ export function HeartRateSync({ hr, ble, maxCap }) {
         </span>
       </div>
 
+      {overCutoff && (
+        <p className="flex items-center gap-1.5 font-mono-data text-xs text-[var(--ossm-hr)] mt-3 pulse-dot" data-testid="hr-sync-cutoff-warning">
+          <AlertTriangle size={14} className="shrink-0" /> HR CUTOFF ({cutoff}) reached — device stopped.
+        </p>
+      )}
       {maxCap < cfg.maxSpeed && (
         <p className="flex items-start gap-1.5 font-mono-data text-[11px] text-amber-300 mt-3">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" /> Max Speed limit ({maxCap}) caps sync below your {cfg.maxSpeed} setting.

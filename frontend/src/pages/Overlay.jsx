@@ -22,7 +22,7 @@ export default function Overlay() {
     speed: 0, depth: 0, stroke: 0, sensation: 0,
     run_seconds: 0, session_seconds: 0, running: false,
     controller: null, host_connected: false,
-    hr_bpm: 0, hr_connected: false,
+    hr_bpm: 0, hr_connected: false, hr_cutoff: 0, hr_over: false,
   });
   const [history, setHistory] = useState({ speed: [], depth: [], stroke: [], sensation: [], hr: [] });
   const [connected, setConnected] = useState(false);
@@ -127,6 +127,11 @@ export default function Overlay() {
               fill={frame.hr_connected && frame.hr_bpm > 0 ? "currentColor" : "none"}
             />
             <span className="font-display text-xs tracking-[0.18em]" style={{ color: HR_COLOR }}>HEART RATE</span>
+            {frame.hr_over && (
+              <span className="font-mono-data text-[11px] tracking-[0.12em] px-2 py-0.5 border border-[var(--ossm-hr)] text-[var(--ossm-hr)] pulse-dot" data-testid="overlay-hr-cutoff">
+                CUTOFF {frame.hr_cutoff}
+              </span>
+            )}
           </div>
           <span className="font-mono-data font-extrabold text-4xl tabular-nums" style={{ color: HR_COLOR }} data-testid="overlay-hr-value">
             {frame.hr_connected ? frame.hr_bpm : "--"}

@@ -209,6 +209,7 @@ class CodeCreate(BaseModel):
 class SettingsInput(BaseModel):
     min_depth: int = Field(ge=0, le=100)
     max_speed: int = Field(ge=0, le=100)
+    hr_cutoff: int = Field(ge=0, le=300, default=0)
 
 class UrlSettingsInput(BaseModel):
     local_url: str = ""
@@ -231,6 +232,8 @@ class Hub:
         self.active_remaining_start: int = 0
         self.device_state: str = ""
         self.limits: dict = {"min_depth": 0, "max_speed": 100}
+        self.hr_cutoff: int = 0
+        self.hr_over: bool = False
         self.overlay_ws: set = set()
         self.telemetry: dict = {"speed": 0, "stroke": 0, "depth": 0, "sensation": 0}
         self.hr: dict = {"bpm": 0, "connected": False}
@@ -265,6 +268,8 @@ class Hub:
             "session_seconds": session,
             "hr_bpm": int(self.hr.get("bpm", 0)),
             "hr_connected": bool(self.hr.get("connected", False)),
+            "hr_cutoff": int(self.hr_cutoff),
+            "hr_over": bool(self.hr_over),
             **self.telemetry,
         }
 
@@ -276,8 +281,29 @@ class Hub:
             except Exception:
                 self.overlay_ws.discard(ws)
 
+    async def evaluate_hr_cutoff(self):
+        """Force-stop and block motion when live BPM crosses the safety cutoff."""
+        cutoff = int(self.hr_cutoff or 0)
+        bpm = int(self.hr.get("bpm", 0))
+        if cutoff > 0 and self.hr.get("connected") and bpm >= cutoff:
+            if not self.hr_over:
+                self.hr_over = True
+                await self.send_to_host({"type": "command", "cmd": "set:speed:0"})
+                await self.send_to_host({"type": "command", "cmd": "go:menu"})
+                self.telemetry["speed"] = 0
+                self._update_motion(0)
+                await log_event("security", "hr_cutoff_triggered", actor="system",
+                                detail={"bpm": bpm, "cutoff": cutoff})
+        elif self.hr_over and bpm < max(0, cutoff - 3):
+            self.hr_over = False
+            await log_event("security", "hr_cutoff_cleared", actor="system",
+                            detail={"bpm": bpm, "cutoff": cutoff})
+
     def clamp_command(self, cmd: str) -> str:
-        """Enforce owner safety limits (min depth floor, max speed cap)."""
+        """Enforce owner safety limits (min depth floor, max speed cap, HR cutoff)."""
+        # Heart-rate safety cutoff: while over the limit, no motion is allowed.
+        if self.hr_over and (cmd.startswith("set:speed:") or cmd == "go:strokeEngine"):
+            return "set:speed:0"
         m = re.match(r'^set:(depth|speed):(\d+)$', cmd)
         if not m:
             return cmd
@@ -687,6 +713,7 @@ async def load_settings() -> dict:
     return {
         "min_depth": int(doc.get("min_depth", 0)),
         "max_speed": int(doc.get("max_speed", 100)),
+        "hr_cutoff": int(doc.get("hr_cutoff", 0)),
         "local_url": doc.get("local_url", "") or "",
         "public_url": doc.get("public_url", "") or "",
     }
@@ -697,9 +724,10 @@ async def get_settings(user: dict = Depends(get_current_user)):
 
 @api_router.put("/settings")
 async def put_settings(body: SettingsInput, user: dict = Depends(get_current_user)):
-    data = {"min_depth": body.min_depth, "max_speed": body.max_speed}
+    data = {"min_depth": body.min_depth, "max_speed": body.max_speed, "hr_cutoff": body.hr_cutoff}
     await db.settings.update_one({"_id": "global"}, {"$set": data}, upsert=True)
-    hub.limits = data
+    hub.limits = {"min_depth": body.min_depth, "max_speed": body.max_speed}
+    hub.hr_cutoff = body.hr_cutoff
     await log_event("security", "limits_updated", actor=user["email"], detail=data)
     return await load_settings()
 
@@ -842,11 +870,13 @@ async def ws_hr(ws: WebSocket):
                     bpm = 0
                 hub.hr["bpm"] = max(0, min(300, bpm))
                 hub.hr["connected"] = True
+                await hub.evaluate_hr_cutoff()
                 await hub.push_telemetry()
             elif data.get("type") == "hr_status":
                 hub.hr["connected"] = bool(data.get("connected"))
                 if not hub.hr["connected"]:
                     hub.hr["bpm"] = 0
+                    hub.hr_over = False
                 await hub.push_telemetry()
     except WebSocketDisconnect:
         pass
@@ -855,6 +885,7 @@ async def ws_hr(ws: WebSocket):
     finally:
         hub.hr["connected"] = False
         hub.hr["bpm"] = 0
+        hub.hr_over = False
         await hub.push_telemetry()
 
 @api_router.get("/overlay/state")
@@ -959,6 +990,7 @@ async def startup():
     await db.login_attempts.create_index("identifier", unique=True)
     s = await load_settings()
     hub.limits = {"min_depth": s["min_depth"], "max_speed": s["max_speed"]}
+    hub.hr_cutoff = s["hr_cutoff"]
     # Optional pre-seed for dev/preview when ADMIN_EMAIL + ADMIN_PASSWORD are set.
     # In self-hosted Docker these are left unset, so the owner creates the admin
     # account via the first-run setup flow (/api/setup).

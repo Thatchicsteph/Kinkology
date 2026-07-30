@@ -39,7 +39,7 @@ export default function AdminDashboard() {
   const [label, setLabel] = useState("");
   const [minutes, setMinutes] = useState(10);
   const [showTest, setShowTest] = useState(false);
-  const [limits, setLimits] = useState({ min_depth: 0, max_speed: 100 });
+  const [limits, setLimits] = useState({ min_depth: 0, max_speed: 100, hr_cutoff: 0 });
   const [savingLimits, setSavingLimits] = useState(false);
   const [urls, setUrls] = useState({ local_url: "", public_url: "" });
   const [savingUrls, setSavingUrls] = useState(false);
@@ -54,7 +54,7 @@ export default function AdminDashboard() {
   const loadLimits = async () => {
     try {
       const { data } = await api.get("/settings");
-      setLimits({ min_depth: data.min_depth, max_speed: data.max_speed });
+      setLimits({ min_depth: data.min_depth, max_speed: data.max_speed, hr_cutoff: data.hr_cutoff ?? 0 });
       setUrls({ local_url: data.local_url || "", public_url: data.public_url || "" });
     } catch (e) {}
   };
@@ -74,8 +74,9 @@ export default function AdminDashboard() {
     try {
       const { data } = await api.put("/settings", {
         min_depth: Number(limits.min_depth), max_speed: Number(limits.max_speed),
+        hr_cutoff: Number(limits.hr_cutoff) || 0,
       });
-      setLimits(data);
+      setLimits({ min_depth: data.min_depth, max_speed: data.max_speed, hr_cutoff: data.hr_cutoff ?? 0 });
       toast.success("Safety limits saved — enforced for all guests");
     } catch (e) { toast.error("Could not save limits"); }
     finally { setSavingLimits(false); }
@@ -299,6 +300,25 @@ export default function AdminDashboard() {
                   className="w-full accent-[var(--ossm-danger)]"
                 />
               </div>
+              <div className="pt-1 border-t border-[var(--ossm-overlay)]">
+                <div className="flex items-center justify-between mb-2 mt-4">
+                  <label className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)] flex items-center gap-1.5">
+                    <Heart size={13} className="text-[var(--ossm-hr)]" /> HR SAFETY CUTOFF
+                  </label>
+                  <span className="font-mono-data text-lg font-bold text-[var(--ossm-hr)]" data-testid="limit-hr-cutoff-value">
+                    {limits.hr_cutoff > 0 ? `${limits.hr_cutoff} BPM` : "OFF"}
+                  </span>
+                </div>
+                <input
+                  type="range" min={0} max={220} step={1} value={limits.hr_cutoff}
+                  onChange={(e) => setLimits((l) => ({ ...l, hr_cutoff: Number(e.target.value) }))}
+                  data-testid="limit-hr-cutoff"
+                  className="w-full accent-[var(--ossm-hr)]"
+                />
+                <p className="font-mono-data text-[11px] text-[var(--ossm-muted)] mt-1.5">
+                  Above this BPM the device force-stops and motion is blocked until it recovers. 0 = off.
+                </p>
+              </div>
               <button
                 onClick={saveLimits}
                 disabled={savingLimits}
@@ -310,7 +330,7 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          <HeartRateSync hr={hr} ble={ble} maxCap={limits.max_speed} />
+          <HeartRateSync hr={hr} ble={ble} maxCap={limits.max_speed} cutoff={limits.hr_cutoff} />
 
           <div className="hud-panel p-5 sm:p-6">
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-5">
