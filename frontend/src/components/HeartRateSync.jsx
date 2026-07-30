@@ -3,23 +3,18 @@ import { HeartPulse, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 const STORE_KEY = "ossm_hr_sync";
-const DEFAULTS = { restingBpm: 60, peakBpm: 150, minSpeed: 10, maxSpeed: 100, rampUp: 25, rampDown: 50 };
-const MAXES = { restingBpm: 240, peakBpm: 240, minSpeed: 100, maxSpeed: 100, rampUp: 100, rampDown: 100 };
-const TICK_MS = 150;
+// Closed-loop target-HR controller: speed is nudged up/down to drive the live
+// heart rate toward targetBpm, then held there.
+const DEFAULTS = { targetBpm: 120, minSpeed: 0, maxSpeed: 100, response: 0.6, rampUp: 25, rampDown: 50 };
+const MAXES = { targetBpm: 240, minSpeed: 100, maxSpeed: 100, response: 5, rampUp: 100, rampDown: 100 };
+const TICK_MS = 1000;
 
-const PRESET_KEYS = ["restingBpm", "peakBpm", "minSpeed", "maxSpeed", "rampUp", "rampDown"];
+const PRESET_KEYS = ["minSpeed", "maxSpeed", "response", "rampUp", "rampDown"];
 const PRESETS = {
-  Gentle:     { restingBpm: 60, peakBpm: 160, minSpeed: 5,  maxSpeed: 60,  rampUp: 12, rampDown: 40 },
-  Responsive: { restingBpm: 60, peakBpm: 150, minSpeed: 10, maxSpeed: 100, rampUp: 25, rampDown: 50 },
-  Intense:    { restingBpm: 70, peakBpm: 140, minSpeed: 30, maxSpeed: 100, rampUp: 60, rampDown: 60 },
+  Gentle:     { minSpeed: 0,  maxSpeed: 60,  response: 0.3, rampUp: 8,  rampDown: 30 },
+  Responsive: { minSpeed: 0,  maxSpeed: 100, response: 0.6, rampUp: 20, rampDown: 40 },
+  Intense:    { minSpeed: 10, maxSpeed: 100, response: 1.2, rampUp: 40, rampDown: 50 },
 };
-
-function matchPreset(cfg) {
-  for (const [name, p] of Object.entries(PRESETS)) {
-    if (PRESET_KEYS.every((k) => Number(cfg[k]) === p[k])) return name;
-  }
-  return null;
-}
 
 function loadCfg() {
   try {
@@ -29,15 +24,14 @@ function loadCfg() {
   return { ...DEFAULTS };
 }
 
-export function bpmToSpeed(bpm, cfg, maxCap) {
-  const { restingBpm, peakBpm, minSpeed, maxSpeed } = cfg;
-  const span = peakBpm - restingBpm;
-  let t = span === 0 ? 0 : (bpm - restingBpm) / span;
-  t = Math.max(0, Math.min(1, t));
-  let sp = Math.round(minSpeed + t * (maxSpeed - minSpeed));
-  sp = Math.max(0, Math.min(100, sp));
-  return Math.min(sp, Math.max(0, maxCap));
+function matchPreset(cfg) {
+  for (const [name, p] of Object.entries(PRESETS)) {
+    if (PRESET_KEYS.every((k) => Number(cfg[k]) === p[k])) return name;
+  }
+  return null;
 }
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   const [cfg, setCfg] = useState(loadCfg);
@@ -46,25 +40,23 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
 
   const ready = hr.connected && ble.connected;
   const overCutoff = cutoff > 0 && hr.connected && hr.bpm >= cutoff;
-  const target = overCutoff ? 0 : bpmToSpeed(hr.bpm, cfg, maxCap);
   const activePreset = matchPreset(cfg);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); }, [cfg]);
 
-  // Latest values for the ramp ticker (avoid stale closures)
   const bpmRef = useRef(hr.bpm); bpmRef.current = hr.bpm;
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
   const maxCapRef = useRef(maxCap); maxCapRef.current = maxCap;
   const cutoffRef = useRef(cutoff); cutoffRef.current = cutoff;
   const hrConnRef = useRef(hr.connected); hrConnRef.current = hr.connected;
-  const currentRef = useRef(0);
+  const commandRef = useRef(0);
   const lastSentRef = useRef(-1);
 
   const setField = (k, v) =>
-    setCfg((c) => ({ ...c, [k]: Math.max(0, Math.min(MAXES[k] ?? 100, Number(v) || 0)) }));
+    setCfg((c) => ({ ...c, [k]: clamp(Number(v) || 0, 0, MAXES[k] ?? 100) }));
 
   const applySpeed = useCallback((v) => {
-    const iv = Math.max(0, Math.min(100, Math.round(v)));
+    const iv = clamp(Math.round(v), 0, 100);
     if (iv !== lastSentRef.current) {
       lastSentRef.current = iv;
       ble.writeCommand(`set:speed:${iv}`);
@@ -74,7 +66,7 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   }, [ble]);
 
   const stopDevice = useCallback(() => {
-    currentRef.current = 0;
+    commandRef.current = 0;
     lastSentRef.current = -1;
     setApplied(0);
     if (ble.connected) {
@@ -83,25 +75,24 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
     }
   }, [ble]);
 
-  // Ramp ticker: eases the applied speed toward the BPM-derived goal.
+  // Control loop: nudge speed to drive live BPM toward targetBpm, then hold.
   useEffect(() => {
     if (!enabled || !ready) return;
+    const dt = TICK_MS / 1000;
     const id = setInterval(() => {
       const c = cfgRef.current;
       const over = cutoffRef.current > 0 && hrConnRef.current && bpmRef.current >= cutoffRef.current;
-      if (over) { currentRef.current = 0; applySpeed(0); return; } // safety: instant stop
-      const goal = bpmToSpeed(bpmRef.current, c, maxCapRef.current);
-      const cur = currentRef.current;
-      const rate = goal > cur ? (Number(c.rampUp) || 100) : (Number(c.rampDown) || 100);
-      const step = rate * (TICK_MS / 1000);
-      const next = Math.abs(goal - cur) <= step ? goal : cur + (goal > cur ? step : -step);
-      currentRef.current = next;
-      applySpeed(next);
+      if (over) { commandRef.current = 0; applySpeed(0); return; } // safety: instant stop
+      const error = Number(c.targetBpm) - bpmRef.current;        // >0 => below target, speed up
+      const delta = clamp(Number(c.response) * error * dt, -Number(c.rampDown) * dt, Number(c.rampUp) * dt);
+      const ceil = Math.min(Number(c.maxSpeed), Math.max(0, maxCapRef.current));
+      commandRef.current = clamp(commandRef.current + delta, Number(c.minSpeed), ceil);
+      applySpeed(commandRef.current);
     }, TICK_MS);
     return () => clearInterval(id);
   }, [enabled, ready, applySpeed]);
 
-  // Fail-safe: monitor or device dropped while syncing
+  // Fail-safe: monitor or device dropped while running
   useEffect(() => {
     if (enabled && (!hr.connected || !ble.connected)) {
       stopDevice();
@@ -113,11 +104,11 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   const toggle = () => {
     if (!enabled) {
       if (!ready) { toast.error("Connect a heart rate monitor and the device first."); return; }
-      currentRef.current = 0;
+      commandRef.current = 0;
       lastSentRef.current = -1;
       setApplied(0);
       setEnabled(true);
-      toast.success("Heart rate sync ON — speed ramps with your BPM");
+      toast.success(`Targeting ${cfg.targetBpm} BPM — speed will adjust to reach and hold it`);
     } else {
       setEnabled(false);
       stopDevice();
@@ -142,7 +133,7 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
           <span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${enabled ? "left-6" : "left-1"}`} />
         </button>
       </div>
-      <p className="text-[var(--ossm-text-2)] text-sm mb-3">Device speed ramps toward your live BPM. Always capped by your Max Speed limit.</p>
+      <p className="text-[var(--ossm-text-2)] text-sm mb-3">Speeds up to reach your target heart rate, then eases off to hold it. Always capped by Max Speed.</p>
 
       <div className="flex gap-2 mb-4" data-testid="hr-sync-presets">
         {Object.keys(PRESETS).map((name) => {
@@ -164,26 +155,32 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
         })}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <NumField label="RESTING BPM" testid="hr-sync-resting" value={cfg.restingBpm} onChange={(v) => setField("restingBpm", v)} />
-        <NumField label="PEAK BPM" testid="hr-sync-peak" value={cfg.peakBpm} onChange={(v) => setField("peakBpm", v)} />
+      <div className="mb-3">
+        <label className="font-display text-[10px] tracking-[0.15em] text-[var(--ossm-text-2)]">TARGET HEART RATE (BPM)</label>
+        <input
+          type="number" value={cfg.targetBpm} onChange={(e) => setField("targetBpm", e.target.value)} data-testid="hr-sync-target-bpm"
+          className="w-full mt-1.5 bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-3 py-2.5 font-mono-data text-lg text-[var(--ossm-hr)] outline-none focus:border-[var(--ossm-hr)] transition-colors"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 mb-4">
         <NumField label="MIN SPEED" testid="hr-sync-minspeed" value={cfg.minSpeed} onChange={(v) => setField("minSpeed", v)} />
         <NumField label="MAX SPEED" testid="hr-sync-maxspeed" value={cfg.maxSpeed} onChange={(v) => setField("maxSpeed", v)} />
+        <NumField label="RESPONSE (%/S·BPM)" testid="hr-sync-response" value={cfg.response} onChange={(v) => setField("response", v)} step="0.1" />
+        <div />
         <NumField label="RAMP UP (%/S)" testid="hr-sync-rampup" value={cfg.rampUp} onChange={(v) => setField("rampUp", v)} />
         <NumField label="RAMP DOWN (%/S)" testid="hr-sync-rampdown" value={cfg.rampDown} onChange={(v) => setField("rampDown", v)} />
       </div>
 
       <div className="flex items-center justify-between bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-4 py-3">
-        <span className="font-mono-data text-xs text-[var(--ossm-text-2)]">
-          {hr.connected ? `${hr.bpm} BPM` : "HR OFF"}
+        <span className="font-mono-data text-xs text-[var(--ossm-text-2)]" data-testid="hr-sync-target">
+          {hr.connected ? `${hr.bpm}` : "--"}<span className="text-[var(--ossm-muted)]"> / {cfg.targetBpm} BPM</span>
         </span>
         <div className="text-right leading-tight">
           <span className="font-mono-data font-bold text-2xl text-[var(--ossm-hr)]" data-testid="hr-sync-applied">
             {enabled && ready ? applied : "--"}<span className="text-xs text-[var(--ossm-muted)] ml-0.5">%</span>
           </span>
-          <span className="block font-mono-data text-[11px] text-[var(--ossm-muted)]" data-testid="hr-sync-target">
-            → target {enabled && ready ? target : "--"}
-          </span>
+          <span className="block font-mono-data text-[11px] text-[var(--ossm-muted)]">speed</span>
         </div>
       </div>
 
@@ -206,12 +203,12 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   );
 }
 
-function NumField({ label, value, onChange, testid }) {
+function NumField({ label, value, onChange, testid, step }) {
   return (
     <div>
       <label className="font-display text-[10px] tracking-[0.15em] text-[var(--ossm-text-2)]">{label}</label>
       <input
-        type="number" value={value} onChange={(e) => onChange(e.target.value)} data-testid={testid}
+        type="number" step={step} value={value} onChange={(e) => onChange(e.target.value)} data-testid={testid}
         className="w-full mt-1.5 bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-3 py-2 font-mono-data text-sm outline-none focus:border-[var(--ossm-hr)] transition-colors"
       />
     </div>

@@ -127,6 +127,9 @@ export default function Overlay() {
               fill={frame.hr_connected && frame.hr_bpm > 0 ? "currentColor" : "none"}
             />
             <span className="font-display text-xs tracking-[0.18em]" style={{ color: HR_COLOR }}>HEART RATE</span>
+            {!frame.hr_connected && (
+              <span className="font-mono-data text-[11px] text-[var(--ossm-muted)]" data-testid="overlay-hr-waiting">waiting for monitor…</span>
+            )}
             {frame.hr_over && (
               <span className="font-mono-data text-[11px] tracking-[0.12em] px-2 py-0.5 border border-[var(--ossm-hr)] text-[var(--ossm-hr)] pulse-dot" data-testid="overlay-hr-cutoff">
                 CUTOFF {frame.hr_cutoff}
