@@ -315,7 +315,7 @@ class Hub:
                 self._update_motion(0)
                 await log_event("security", "hr_cutoff_triggered", actor="system",
                                 detail={"bpm": bpm, "cutoff": cutoff})
-        elif self.hr_over and bpm < max(0, cutoff - 3):
+        elif self.hr_over and self.hr.get("connected") and bpm < cutoff:
             self.hr_over = False
             await log_event("security", "hr_cutoff_cleared", actor="system",
                             detail={"bpm": bpm, "cutoff": cutoff})
