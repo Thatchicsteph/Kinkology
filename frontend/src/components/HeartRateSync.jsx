@@ -3,7 +3,9 @@ import { HeartPulse, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 const STORE_KEY = "ossm_hr_sync";
-const DEFAULTS = { restingBpm: 60, peakBpm: 150, minSpeed: 10, maxSpeed: 100 };
+const DEFAULTS = { restingBpm: 60, peakBpm: 150, minSpeed: 10, maxSpeed: 100, rampUp: 25, rampDown: 50 };
+const MAXES = { restingBpm: 240, peakBpm: 240, minSpeed: 100, maxSpeed: 100, rampUp: 100, rampDown: 100 };
+const TICK_MS = 150;
 
 function loadCfg() {
   try {
@@ -26,7 +28,7 @@ export function bpmToSpeed(bpm, cfg, maxCap) {
 export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   const [cfg, setCfg] = useState(loadCfg);
   const [enabled, setEnabled] = useState(false);
-  const lastSentRef = useRef(-1);
+  const [applied, setApplied] = useState(0);
 
   const ready = hr.connected && ble.connected;
   const overCutoff = cutoff > 0 && hr.connected && hr.bpm >= cutoff;
@@ -34,25 +36,55 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
 
   useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); }, [cfg]);
 
-  const setField = (k, v) => setCfg((c) => ({ ...c, [k]: Math.max(0, Math.min(k.endsWith("Speed") ? 100 : 240, Number(v) || 0)) }));
+  // Latest values for the ramp ticker (avoid stale closures)
+  const bpmRef = useRef(hr.bpm); bpmRef.current = hr.bpm;
+  const cfgRef = useRef(cfg); cfgRef.current = cfg;
+  const maxCapRef = useRef(maxCap); maxCapRef.current = maxCap;
+  const cutoffRef = useRef(cutoff); cutoffRef.current = cutoff;
+  const hrConnRef = useRef(hr.connected); hrConnRef.current = hr.connected;
+  const currentRef = useRef(0);
+  const lastSentRef = useRef(-1);
+
+  const setField = (k, v) =>
+    setCfg((c) => ({ ...c, [k]: Math.max(0, Math.min(MAXES[k] ?? 100, Number(v) || 0)) }));
+
+  const applySpeed = useCallback((v) => {
+    const iv = Math.max(0, Math.min(100, Math.round(v)));
+    if (iv !== lastSentRef.current) {
+      lastSentRef.current = iv;
+      ble.writeCommand(`set:speed:${iv}`);
+      ble.sendHostMessage?.({ type: "owner_telemetry", speed: iv });
+      setApplied(iv);
+    }
+  }, [ble]);
 
   const stopDevice = useCallback(() => {
+    currentRef.current = 0;
+    lastSentRef.current = -1;
+    setApplied(0);
     if (ble.connected) {
       ble.writeCommand("set:speed:0");
       ble.sendHostMessage?.({ type: "owner_telemetry", speed: 0 });
     }
-    lastSentRef.current = -1;
   }, [ble]);
 
-  // Drive speed from live BPM while enabled
+  // Ramp ticker: eases the applied speed toward the BPM-derived goal.
   useEffect(() => {
     if (!enabled || !ready) return;
-    if (target !== lastSentRef.current) {
-      lastSentRef.current = target;
-      ble.writeCommand(`set:speed:${target}`);
-      ble.sendHostMessage?.({ type: "owner_telemetry", speed: target });
-    }
-  }, [enabled, ready, target, ble]);
+    const id = setInterval(() => {
+      const c = cfgRef.current;
+      const over = cutoffRef.current > 0 && hrConnRef.current && bpmRef.current >= cutoffRef.current;
+      if (over) { currentRef.current = 0; applySpeed(0); return; } // safety: instant stop
+      const goal = bpmToSpeed(bpmRef.current, c, maxCapRef.current);
+      const cur = currentRef.current;
+      const rate = goal > cur ? (Number(c.rampUp) || 100) : (Number(c.rampDown) || 100);
+      const step = rate * (TICK_MS / 1000);
+      const next = Math.abs(goal - cur) <= step ? goal : cur + (goal > cur ? step : -step);
+      currentRef.current = next;
+      applySpeed(next);
+    }, TICK_MS);
+    return () => clearInterval(id);
+  }, [enabled, ready, applySpeed]);
 
   // Fail-safe: monitor or device dropped while syncing
   useEffect(() => {
@@ -66,8 +98,11 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   const toggle = () => {
     if (!enabled) {
       if (!ready) { toast.error("Connect a heart rate monitor and the device first."); return; }
+      currentRef.current = 0;
+      lastSentRef.current = -1;
+      setApplied(0);
       setEnabled(true);
-      toast.success("Heart rate sync ON — speed follows your BPM");
+      toast.success("Heart rate sync ON — speed ramps with your BPM");
     } else {
       setEnabled(false);
       stopDevice();
@@ -92,22 +127,29 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
           <span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${enabled ? "left-6" : "left-1"}`} />
         </button>
       </div>
-      <p className="text-[var(--ossm-text-2)] text-sm mb-4">Device speed follows your live BPM. Always capped by your Max Speed limit.</p>
+      <p className="text-[var(--ossm-text-2)] text-sm mb-4">Device speed ramps toward your live BPM. Always capped by your Max Speed limit.</p>
 
-      <div className="grid grid-cols-2 gap-3 mb-4">
+      <div className="grid grid-cols-2 gap-3 mb-3">
         <NumField label="RESTING BPM" testid="hr-sync-resting" value={cfg.restingBpm} onChange={(v) => setField("restingBpm", v)} />
         <NumField label="PEAK BPM" testid="hr-sync-peak" value={cfg.peakBpm} onChange={(v) => setField("peakBpm", v)} />
         <NumField label="MIN SPEED" testid="hr-sync-minspeed" value={cfg.minSpeed} onChange={(v) => setField("minSpeed", v)} />
         <NumField label="MAX SPEED" testid="hr-sync-maxspeed" value={cfg.maxSpeed} onChange={(v) => setField("maxSpeed", v)} />
+        <NumField label="RAMP UP (%/S)" testid="hr-sync-rampup" value={cfg.rampUp} onChange={(v) => setField("rampUp", v)} />
+        <NumField label="RAMP DOWN (%/S)" testid="hr-sync-rampdown" value={cfg.rampDown} onChange={(v) => setField("rampDown", v)} />
       </div>
 
       <div className="flex items-center justify-between bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-4 py-3">
         <span className="font-mono-data text-xs text-[var(--ossm-text-2)]">
-          {hr.connected ? `${hr.bpm} BPM` : "HR OFF"} → TARGET
+          {hr.connected ? `${hr.bpm} BPM` : "HR OFF"}
         </span>
-        <span className="font-mono-data font-bold text-2xl text-[var(--ossm-hr)]" data-testid="hr-sync-target">
-          {enabled && ready ? target : "--"}<span className="text-xs text-[var(--ossm-muted)] ml-0.5">%</span>
-        </span>
+        <div className="text-right leading-tight">
+          <span className="font-mono-data font-bold text-2xl text-[var(--ossm-hr)]" data-testid="hr-sync-applied">
+            {enabled && ready ? applied : "--"}<span className="text-xs text-[var(--ossm-muted)] ml-0.5">%</span>
+          </span>
+          <span className="block font-mono-data text-[11px] text-[var(--ossm-muted)]" data-testid="hr-sync-target">
+            → target {enabled && ready ? target : "--"}
+          </span>
+        </div>
       </div>
 
       {overCutoff && (
