@@ -246,6 +246,11 @@ class Hub:
         self.overlay_ws: set = set()
         self.telemetry: dict = {"speed": 0, "stroke": 0, "depth": 0, "sensation": 0}
         self.hr: dict = {"bpm": 0, "connected": False}
+        self.hr_sync: dict = {"enabled": False, "target": 120, "min_speed": 0,
+                              "max_speed": 100, "response": 0.6, "ramp_up": 25.0,
+                              "ramp_down": 50.0, "schedule": []}
+        self.hr_sync_command: float = 0.0
+        self.hr_sync_started: Optional[float] = None
         self.motion_accum: float = 0.0
         self.motion_start: Optional[float] = None
         self.lock = asyncio.Lock()
@@ -309,7 +314,6 @@ class Hub:
                             detail={"bpm": bpm, "cutoff": cutoff})
 
     def clamp_command(self, cmd: str) -> str:
-        """Enforce owner safety limits (min depth floor, max speed cap, HR cutoff)."""
         # Heart-rate safety cutoff: while over the limit, no motion is allowed.
         if self.hr_over and (cmd.startswith("set:speed:") or cmd == "go:strokeEngine"):
             return "set:speed:0"
