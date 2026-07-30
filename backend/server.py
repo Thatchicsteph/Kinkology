@@ -321,15 +321,19 @@ class Hub:
                             detail={"bpm": bpm, "cutoff": cutoff})
             resume_speed = self.clamp_command(f"set:speed:{self.pre_cutoff_speed}")
             resume_speed = int(resume_speed.split(":")[-1])
-            # If HR Sync is driving speed itself, let its own control loop resume;
-            # otherwise restore motion to where it was before the cutoff tripped.
+            # The cutoff trip always sends go:menu, regardless of hr_sync_enabled,
+            # so the resume must always send go:strokeEngine to bring the device
+            # back — otherwise it stays parked on the menu screen forever.
+            await self.send_to_host({"type": "command", "cmd": "go:strokeEngine"})
+            # If HR Sync is driving speed itself, let its own control loop take it
+            # from here; otherwise restore motion to where it was before the trip.
             if not self.hr_sync_enabled and resume_speed > 0:
-                await self.send_to_host({"type": "command", "cmd": "go:strokeEngine"})
                 await self.send_to_host({"type": "command", "cmd": f"set:speed:{resume_speed}"})
                 self.telemetry["speed"] = resume_speed
                 self._update_motion(resume_speed)
-                await log_event("security", "hr_cutoff_resumed", actor="system",
-                                detail={"bpm": bpm, "cutoff": cutoff, "speed": resume_speed})
+            await log_event("security", "hr_cutoff_resumed", actor="system",
+                            detail={"bpm": bpm, "cutoff": cutoff,
+                                     "speed": resume_speed if not self.hr_sync_enabled else self.telemetry.get("speed", 0)})
             self.pre_cutoff_speed = 0
 
     def clamp_command(self, cmd: str) -> str:
