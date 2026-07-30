@@ -935,7 +935,14 @@ async def ws_hr(ws: WebSocket):
                 hub.hr["connected"] = bool(data.get("connected"))
                 if not hub.hr["connected"]:
                     hub.hr["bpm"] = 0
-                    hub.hr_over = False
+                    # NOTE: intentionally do NOT clear hr_over here. If the cutoff
+                    # was tripped, the device stays safely stopped while the strap
+                    # is disconnected (no live BPM to confirm it's safe to resume).
+                    # hr_over only clears via evaluate_hr_cutoff() once a real BPM
+                    # reading below the cutoff comes back in, which also fires the
+                    # actual go:strokeEngine/set:speed resume commands. Clearing it
+                    # here left hr_over permanently False with the device parked at
+                    # speed 0 and no way to ever trigger the resume path again.
                 await hub.push_telemetry()
     except WebSocketDisconnect:
         pass
