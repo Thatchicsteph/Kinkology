@@ -44,6 +44,11 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
 
   useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(cfg)); }, [cfg]);
 
+  // Publish target BPM + sync state to the overlay via the host connection.
+  useEffect(() => {
+    ble.sendHostMessage?.({ type: "owner_telemetry", hr_target: Number(cfg.targetBpm) || 0, hr_sync_enabled: enabled });
+  }, [cfg.targetBpm, enabled, ble]);
+
   const bpmRef = useRef(hr.bpm); bpmRef.current = hr.bpm;
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
   const maxCapRef = useRef(maxCap); maxCapRef.current = maxCap;

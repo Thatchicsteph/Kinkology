@@ -243,6 +243,9 @@ class Hub:
         self.limits: dict = {"min_depth": 0, "max_speed": 100}
         self.hr_cutoff: int = 0
         self.hr_over: bool = False
+        self.pre_cutoff_speed: int = 0
+        self.hr_target: int = 0
+        self.hr_sync_enabled: bool = False
         self.overlay_ws: set = set()
         self.telemetry: dict = {"speed": 0, "stroke": 0, "depth": 0, "sensation": 0}
         self.hr: dict = {"bpm": 0, "connected": False}
@@ -284,6 +287,8 @@ class Hub:
             "hr_connected": bool(self.hr.get("connected", False)),
             "hr_cutoff": int(self.hr_cutoff),
             "hr_over": bool(self.hr_over),
+            "hr_target": int(self.hr_target),
+            "hr_sync_enabled": bool(self.hr_sync_enabled),
             **self.telemetry,
         }
 
@@ -296,12 +301,14 @@ class Hub:
                 self.overlay_ws.discard(ws)
 
     async def evaluate_hr_cutoff(self):
-        """Force-stop and block motion when live BPM crosses the safety cutoff."""
+        """Force-stop and block motion when live BPM crosses the safety cutoff;
+        resume automatically once BPM drops back below it."""
         cutoff = int(self.hr_cutoff or 0)
         bpm = int(self.hr.get("bpm", 0))
         if cutoff > 0 and self.hr.get("connected") and bpm >= cutoff:
             if not self.hr_over:
                 self.hr_over = True
+                self.pre_cutoff_speed = int(self.telemetry.get("speed", 0))
                 await self.send_to_host({"type": "command", "cmd": "set:speed:0"})
                 await self.send_to_host({"type": "command", "cmd": "go:menu"})
                 self.telemetry["speed"] = 0
@@ -312,6 +319,18 @@ class Hub:
             self.hr_over = False
             await log_event("security", "hr_cutoff_cleared", actor="system",
                             detail={"bpm": bpm, "cutoff": cutoff})
+            resume_speed = self.clamp_command(f"set:speed:{self.pre_cutoff_speed}")
+            resume_speed = int(resume_speed.split(":")[-1])
+            # If HR Sync is driving speed itself, let its own control loop resume;
+            # otherwise restore motion to where it was before the cutoff tripped.
+            if not self.hr_sync_enabled and resume_speed > 0:
+                await self.send_to_host({"type": "command", "cmd": "go:strokeEngine"})
+                await self.send_to_host({"type": "command", "cmd": f"set:speed:{resume_speed}"})
+                self.telemetry["speed"] = resume_speed
+                self._update_motion(resume_speed)
+                await log_event("security", "hr_cutoff_resumed", actor="system",
+                                detail={"bpm": bpm, "cutoff": cutoff, "speed": resume_speed})
+            self.pre_cutoff_speed = 0
 
     def clamp_command(self, cmd: str) -> str:
         # Heart-rate safety cutoff: while over the limit, no motion is allowed.
@@ -818,10 +837,22 @@ async def ws_host(ws: WebSocket):
                     sp = int(data.get("speed"))
                 except (TypeError, ValueError):
                     sp = None
+                changed = False
                 if sp is not None:
                     sp = max(0, min(100, sp))
                     hub.telemetry["speed"] = sp
                     hub._update_motion(sp)
+                    changed = True
+                if "hr_target" in data:
+                    try:
+                        hub.hr_target = max(0, min(240, int(data.get("hr_target"))))
+                        changed = True
+                    except (TypeError, ValueError):
+                        pass
+                if "hr_sync_enabled" in data:
+                    hub.hr_sync_enabled = bool(data.get("hr_sync_enabled"))
+                    changed = True
+                if changed:
                     await hub.push_telemetry()
     except WebSocketDisconnect:
         pass

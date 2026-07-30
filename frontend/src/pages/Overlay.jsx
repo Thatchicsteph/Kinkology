@@ -13,6 +13,7 @@ const METRICS = [
 
 const CAP = 120; // rolling window points (~60s at 500ms)
 const HR_COLOR = "#FF4D6D";
+const HR_TARGET_COLOR = "#00E5FF";
 
 export default function Overlay() {
   const [params] = useSearchParams();
@@ -23,6 +24,7 @@ export default function Overlay() {
     run_seconds: 0, session_seconds: 0, running: false,
     controller: null, host_connected: false,
     hr_bpm: 0, hr_connected: false, hr_cutoff: 0, hr_over: false,
+    hr_target: 0, hr_sync_enabled: false,
   });
   const [history, setHistory] = useState({ speed: [], depth: [], stroke: [], sensation: [], hr: [] });
   const [connected, setConnected] = useState(false);
@@ -135,13 +137,37 @@ export default function Overlay() {
                 CUTOFF {frame.hr_cutoff}
               </span>
             )}
+            {frame.hr_sync_enabled && frame.hr_target > 0 && (
+              <span
+                className="font-mono-data text-[11px] tracking-[0.12em] px-2 py-0.5 border"
+                style={{ borderColor: HR_TARGET_COLOR, color: HR_TARGET_COLOR }}
+                data-testid="overlay-hr-target-badge"
+              >
+                TARGET {frame.hr_target}
+              </span>
+            )}
           </div>
-          <span className="font-mono-data font-extrabold text-4xl tabular-nums" style={{ color: HR_COLOR }} data-testid="overlay-hr-value">
-            {frame.hr_connected ? frame.hr_bpm : "--"}
-            <span className="text-sm text-[var(--ossm-muted)] ml-1">BPM</span>
-          </span>
+          <div className="text-right">
+            <span className="font-mono-data font-extrabold text-4xl tabular-nums" style={{ color: HR_COLOR }} data-testid="overlay-hr-value">
+              {frame.hr_connected ? frame.hr_bpm : "--"}
+              <span className="text-sm text-[var(--ossm-muted)] ml-1">BPM</span>
+            </span>
+            {frame.hr_sync_enabled && frame.hr_target > 0 && (
+              <p className="font-mono-data text-xs tabular-nums" style={{ color: HR_TARGET_COLOR }} data-testid="overlay-hr-target-value">
+                target {frame.hr_target} BPM
+              </p>
+            )}
+          </div>
         </div>
-        <Sparkline data={history.hr} color={HR_COLOR} id="hr" height={72} max={200} />
+        <Sparkline
+          data={history.hr}
+          color={HR_COLOR}
+          id="hr"
+          height={72}
+          max={200}
+          refValue={frame.hr_sync_enabled && frame.hr_target > 0 ? frame.hr_target : null}
+          refColor={HR_TARGET_COLOR}
+        />
       </div>
 
       {/* Metric graphs */}
