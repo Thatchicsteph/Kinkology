@@ -40,7 +40,15 @@ Create a local, self-hostable web app that acts as a bridge from the internet to
 - **Live telemetry overlay** (`/overlay`, public, OBS-ready): backend tracks current speed/stroke/depth/sensation (post-clamp) + motion run time + session time, broadcast over public WS `/api/ws/overlay` (+ GET `/api/overlay/state`). Page renders rolling SVG sparklines + run/session timers + controller + status; `?transparent=1` for OBS. Dashboard has copy/open link card. Verified 47/47 tests (iteration_6).
 
 ## Credentials
-See `/app/memory/test_credentials.md`. Admin: `admin@ossm.local` / `ossm-admin-2026`.
+See `/app/memory/test_credentials.md`. Preview/dev admin (env-seeded): `admin@ossm.local` / `ossm-admin-2026`.
+Self-hosted Docker has NO seeded admin — owner creates it via first-run setup.
+
+## Implemented (2026-07-30)
+- **First-run setup flow**: env-based admin seeding is now OPTIONAL (only when `ADMIN_EMAIL`+`ADMIN_PASSWORD` set — used in preview/dev). Self-hosted Docker leaves them unset, so the owner creates the admin account on first launch. New endpoints: `GET /api/setup/status` (`{needs_setup}`), `POST /api/setup` (creates single admin if none exists, min 8-char password, returns token+cookie, 403 once set up). `AdminLogin.jsx` gates: checking → create-owner form → login → 2FA. Verified end-to-end via `/app/test_setup_flow.py` (empty→create→blocked→login).
+- **Same-origin frontend**: `api.js` now falls back to `window.location` for `WS_BASE`/`API` when `REACT_APP_BACKEND_URL` is empty (Docker/Caddy single-origin). Preview behaviour unchanged (env var still set). Production build verified.
+- **Complete Docker Compose stack** (`docker-compose.yml`): 4 concerns via 3 services — `mongo` (7.0, named volume `mongo_data`), `backend` (FastAPI, internal :8001), `web` (multi-stage: node build React → Caddy serving static + reverse-proxying `/api/*` incl. WebSockets to backend, auto HTTPS on ports 80/443). Files: `frontend/Dockerfile`, `frontend/Caddyfile` (domain `tg30.ddns.net` + `http://localhost`), `frontend/.dockerignore`, `env.docker.example` (JWT_SECRET template, copy to `.env`), `DOCKER.md` (Mac instructions). `restart: unless-stopped` for reboot persistence. NOTE: Docker build/run NOT executed in this env (no docker daemon) — compose YAML + app code changes validated; user must run `docker compose up -d --build` on their Mac.
+
+## Implemented (2026-07-29)
 
 ## Backlog
 - **P1**: Multi-device support; persistent queue across backend restarts; per-slider min/max safety caps set by owner.

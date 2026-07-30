@@ -1,0 +1,26 @@
+{
+	email admin@tg30.ddns.net
+}
+
+# Shared routing: /api/* (incl. WebSockets) -> backend, everything else -> SPA
+(app) {
+	handle /api/* {
+		reverse_proxy backend:8001
+	}
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# Public HTTPS via Let's Encrypt.
+# Requires router port-forwards: 80 -> Mac and 443 -> Mac.
+tg30.ddns.net {
+	import app
+}
+
+# Local owner access on the Mac: http://localhost
+http://localhost {
+	import app
+}

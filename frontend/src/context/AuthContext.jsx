@@ -21,6 +21,18 @@ export function AuthProvider({ children }) {
       });
   }, []);
 
+  const checkSetup = async () => {
+    const { data } = await api.get("/setup/status");
+    return data.needs_setup;
+  };
+
+  const setupAdmin = async (email, password) => {
+    const { data } = await api.post("/setup", { email, password });
+    localStorage.setItem("ossm_token", data.token);
+    setUser(data.user);
+    return data.user;
+  };
+
   const login = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
     if (data.mfa_required) {
@@ -51,7 +63,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, verify2fa, logout }}>
+    <AuthContext.Provider value={{ user, login, verify2fa, logout, checkSetup, setupAdmin }}>
       {children}
     </AuthContext.Provider>
   );

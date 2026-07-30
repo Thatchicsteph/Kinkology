@@ -163,6 +163,10 @@ class LoginInput(BaseModel):
     email: str
     password: str
 
+class SetupInput(BaseModel):
+    email: str
+    password: str
+
 class TwoFAVerify(BaseModel):
     code: str
 
@@ -400,6 +404,30 @@ async def ticker_loop():
 # ------------------------------------------------------------------
 # Auth routes
 # ------------------------------------------------------------------
+@api_router.get("/setup/status")
+async def setup_status():
+    count = await db.users.count_documents({})
+    return {"needs_setup": count == 0}
+
+@api_router.post("/setup")
+async def setup_admin(body: SetupInput, response: Response):
+    if await db.users.count_documents({}) > 0:
+        raise HTTPException(status_code=403, detail="Setup already completed. Please sign in.")
+    email = body.email.strip().lower()
+    if "@" not in email or "." not in email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    res = await db.users.insert_one({
+        "email": email, "password_hash": hash_password(body.password),
+        "name": "Admin", "role": "admin", "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    uid = str(res.inserted_id)
+    token = create_access_token(uid, email)
+    response.set_cookie("access_token", token, httponly=True, secure=True,
+                        samesite="none", max_age=604800, path="/")
+    return {"token": token, "user": {"id": uid, "email": email, "name": "Admin"}}
+
 @api_router.post("/auth/login")
 async def login(body: LoginInput, request: Request, response: Response):
     email = body.email.strip().lower()
@@ -726,18 +754,23 @@ async def startup():
     await db.access_codes.create_index("code", unique=True)
     await db.login_attempts.create_index("identifier", unique=True)
     hub.limits = await load_settings()
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@ossm.local").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "ossm-admin-2026")
-    existing = await db.users.find_one({"email": admin_email})
-    if existing is None:
-        await db.users.insert_one({
-            "email": admin_email, "password_hash": hash_password(admin_password),
-            "name": "Admin", "role": "admin", "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        logger.info("Seeded admin user")
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email},
-                                  {"$set": {"password_hash": hash_password(admin_password)}})
+    # Optional pre-seed for dev/preview when ADMIN_EMAIL + ADMIN_PASSWORD are set.
+    # In self-hosted Docker these are left unset, so the owner creates the admin
+    # account via the first-run setup flow (/api/setup).
+    admin_email = os.environ.get("ADMIN_EMAIL")
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    if admin_email and admin_password:
+        admin_email = admin_email.lower()
+        existing = await db.users.find_one({"email": admin_email})
+        if existing is None:
+            await db.users.insert_one({
+                "email": admin_email, "password_hash": hash_password(admin_password),
+                "name": "Admin", "role": "admin", "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info("Seeded admin user")
+        elif not verify_password(admin_password, existing["password_hash"]):
+            await db.users.update_one({"email": admin_email},
+                                      {"$set": {"password_hash": hash_password(admin_password)}})
     asyncio.create_task(ticker_loop())
 
 @app.on_event("shutdown")
