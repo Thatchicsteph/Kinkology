@@ -21,7 +21,9 @@ import qrcode
 import base64
 import hashlib
 import hmac
-from io import BytesIO
+import csv
+import json
+from io import BytesIO, StringIO
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -127,9 +129,32 @@ async def record_failure(identifier: str):
             {"identifier": identifier},
             {"$set": {"locked_until": time.time() + LOCKOUT_SECONDS}},
         )
+        await log_event("security", "account_locked", actor=identifier,
+                        detail={"attempts": doc.get("count", 0)})
 
 async def clear_attempts(identifier: str):
     await db.login_attempts.delete_one({"identifier": identifier})
+
+# ------------------------------------------------------------------
+# Audit & activity log
+# ------------------------------------------------------------------
+async def log_event(category: str, action: str, actor: str = "system",
+                    target: Optional[str] = None, detail=None, ip: Optional[str] = None):
+    try:
+        await db.audit_logs.insert_one({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "category": category, "action": action, "actor": actor,
+            "target": target, "detail": detail, "ip": ip,
+        })
+    except Exception as e:
+        logger.error(f"audit log failed: {e}")
+
+def log_public(d: dict) -> dict:
+    return {
+        "id": str(d["_id"]), "ts": d.get("ts"), "category": d.get("category"),
+        "action": d.get("action"), "actor": d.get("actor"),
+        "target": d.get("target"), "detail": d.get("detail"), "ip": d.get("ip"),
+    }
 
 def decode_token(token: str) -> dict:
     return jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
@@ -301,6 +326,8 @@ class Hub:
             self.active_start = time.monotonic()
             self.active_remaining_start = remaining
             self.reset_telemetry()
+            await log_event("session", "guest_active", actor=f"guest:{client['label']}",
+                            target=client["code"], detail={"remaining_seconds": remaining})
             break
 
     async def end_active(self, reason: str = "ended"):
@@ -317,6 +344,8 @@ class Hub:
                  "$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}},
             )
             await self._send(client["ws"], {"type": "turn_ended", "reason": reason})
+            await log_event("session", "turn_ended", actor=f"guest:{client['label']}",
+                            target=client["code"], detail={"reason": reason, "seconds": consumed})
         # Safety: stop the device between turns
         await self.send_to_host({"type": "command", "cmd": "set:speed:0"})
         await self.send_to_host({"type": "command", "cmd": "go:menu"})
@@ -330,6 +359,7 @@ class Hub:
         self.clients[cid] = {"ws": ws, "code": code, "label": label}
         if cid not in self.queue and cid != self.active_id:
             self.queue.append(cid)
+        await log_event("session", "guest_joined", actor=f"guest:{label}", target=code)
         await self.promote()
 
     async def remove_client(self, cid: str):
@@ -439,6 +469,7 @@ async def setup_admin(body: SetupInput, response: Response):
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
                         samesite="none", max_age=604800, path="/")
+    await log_event("security", "owner_created", actor=email, ip=client_ip(request))
     return {"token": token, "user": {"id": uid, "email": email, "name": "Admin"}}
 
 @api_router.post("/auth/login")
@@ -449,6 +480,7 @@ async def login(body: LoginInput, request: Request, response: Response):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
         await record_failure(ident)
+        await log_event("security", "login_failed", actor=email, ip=client_ip(request))
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await clear_attempts(ident)
     uid = str(user["_id"])
@@ -457,6 +489,7 @@ async def login(body: LoginInput, request: Request, response: Response):
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
                         samesite="none", max_age=604800, path="/")
+    await log_event("security", "login_success", actor=email, ip=client_ip(request))
     return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", "Admin")}}
 
 @api_router.post("/auth/2fa/login")
@@ -490,6 +523,9 @@ async def twofa_login(body: TwoFALogin, request: Request, response: Response):
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
                         samesite="none", max_age=604800, path="/")
+    await log_event("security", "login_success",
+                    actor=email, ip=client_ip(request),
+                    detail={"method": "recovery_code" if body.recovery_code else "totp"})
     return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", "Admin")}}
 
 @api_router.get("/auth/2fa/status")
@@ -523,6 +559,7 @@ async def twofa_setup_verify(body: TwoFAVerify, request: Request, user: dict = D
                   "recovery_codes_hash": [hash_recovery(c) for c in codes]},
          "$unset": {"twofa_pending_secret": ""}},
     )
+    await log_event("security", "twofa_enabled", actor=user["email"], ip=client_ip(request))
     return {"ok": True, "recovery_codes": codes}
 
 @api_router.post("/auth/2fa/disable")
@@ -543,6 +580,7 @@ async def twofa_disable(body: TwoFAVerify, request: Request, user: dict = Depend
         {"$set": {"twofa_enabled": False},
          "$unset": {"totp_secret": "", "recovery_codes_hash": "", "twofa_pending_secret": ""}},
     )
+    await log_event("security", "twofa_disabled", actor=user["email"], ip=client_ip(request))
     return {"ok": True}
 
 @api_router.post("/auth/logout")
@@ -588,6 +626,8 @@ async def create_code(body: CodeCreate, user: dict = Depends(get_current_user)):
     }
     res = await db.access_codes.insert_one(doc)
     doc["_id"] = res.inserted_id
+    await log_event("security", "code_created", actor=user["email"], target=code,
+                    detail={"minutes": body.minutes, "label": body.label.strip()})
     return code_public(doc)
 
 @api_router.get("/codes")
@@ -597,7 +637,10 @@ async def list_codes(user: dict = Depends(get_current_user)):
 
 @api_router.post("/codes/{code_id}/revoke")
 async def revoke_code(code_id: str, user: dict = Depends(get_current_user)):
-    await db.access_codes.update_one({"_id": ObjectId(code_id)}, {"$set": {"revoked": True}})
+    doc = await db.access_codes.find_one_and_update(
+        {"_id": ObjectId(code_id)}, {"$set": {"revoked": True}})
+    if doc:
+        await log_event("security", "code_revoked", actor=user["email"], target=doc.get("code"))
     return {"ok": True}
 
 @api_router.post("/codes/{code_id}/add-minutes")
@@ -607,11 +650,16 @@ async def add_minutes(code_id: str, body: CodeCreate, user: dict = Depends(get_c
         {"$inc": {"granted_seconds": body.minutes * 60}, "$set": {"revoked": False}},
     )
     doc = await db.access_codes.find_one({"_id": ObjectId(code_id)})
+    await log_event("security", "code_extended", actor=user["email"],
+                    target=doc.get("code") if doc else None, detail={"minutes": body.minutes})
     return code_public(doc)
 
 @api_router.delete("/codes/{code_id}")
 async def delete_code(code_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.access_codes.find_one({"_id": ObjectId(code_id)})
     await db.access_codes.delete_one({"_id": ObjectId(code_id)})
+    if doc:
+        await log_event("security", "code_deleted", actor=user["email"], target=doc.get("code"))
     return {"ok": True}
 
 # ------------------------------------------------------------------
@@ -649,12 +697,14 @@ async def put_settings(body: SettingsInput, user: dict = Depends(get_current_use
     data = {"min_depth": body.min_depth, "max_speed": body.max_speed}
     await db.settings.update_one({"_id": "global"}, {"$set": data}, upsert=True)
     hub.limits = data
+    await log_event("security", "limits_updated", actor=user["email"], detail=data)
     return await load_settings()
 
 @api_router.put("/settings/urls")
 async def put_url_settings(body: UrlSettingsInput, user: dict = Depends(get_current_user)):
     data = {"local_url": body.local_url.strip(), "public_url": body.public_url.strip()}
     await db.settings.update_one({"_id": "global"}, {"$set": data}, upsert=True)
+    await log_event("security", "urls_updated", actor=user["email"], detail=data)
     return await load_settings()
 
 # ------------------------------------------------------------------
@@ -668,6 +718,7 @@ async def session_state(user: dict = Depends(get_current_user)):
 async def session_stop(user: dict = Depends(get_current_user)):
     await hub.send_to_host({"type": "command", "cmd": "set:speed:0"})
     await hub.send_to_host({"type": "command", "cmd": "go:menu"})
+    await log_event("security", "emergency_stop", actor=user["email"])
     return {"ok": True}
 
 @api_router.post("/session/skip")
@@ -676,6 +727,7 @@ async def session_skip(user: dict = Depends(get_current_user)):
         await hub.end_active("skipped_by_admin")
         await hub.promote()
         await hub.broadcast()
+    await log_event("security", "session_skipped", actor=user["email"])
     return {"ok": True}
 
 # ------------------------------------------------------------------
@@ -691,6 +743,7 @@ async def ws_host(ws: WebSocket):
         return
     await ws.accept()
     hub.host_ws = ws
+    await log_event("session", "device_connected", actor="owner")
     await hub.broadcast()
     try:
         while True:
@@ -708,6 +761,7 @@ async def ws_host(ws: WebSocket):
     finally:
         if hub.host_ws is ws:
             hub.host_ws = None
+            await log_event("session", "device_disconnected", actor="owner")
         await hub.broadcast()
 
 @app.websocket("/api/ws/control/{code}")
@@ -758,6 +812,81 @@ async def ws_overlay(ws: WebSocket):
 async def overlay_state():
     return hub.telemetry_frame()
 
+# ------------------------------------------------------------------
+# Audit & activity log routes
+# ------------------------------------------------------------------
+def _log_query(category, q, start, end):
+    query = {}
+    if category in ("security", "session"):
+        query["category"] = category
+    if start or end:
+        ts = {}
+        if start:
+            ts["$gte"] = start
+        if end:
+            ts["$lte"] = end
+        query["ts"] = ts
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [{"action": rx}, {"actor": rx}, {"target": rx}]
+    return query
+
+@api_router.get("/logs")
+async def list_logs(
+    user: dict = Depends(get_current_user),
+    category: Optional[str] = None,
+    q: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0,
+):
+    limit = max(1, min(500, limit))
+    query = _log_query(category, q, start, end)
+    total = await db.audit_logs.count_documents(query)
+    docs = await db.audit_logs.find(query).sort("ts", -1).skip(max(0, skip)).limit(limit).to_list(limit)
+    return {"items": [log_public(d) for d in docs], "total": total, "limit": limit, "skip": skip}
+
+@api_router.delete("/logs")
+async def clear_logs(user: dict = Depends(get_current_user)):
+    res = await db.audit_logs.delete_many({})
+    await log_event("security", "logs_cleared", actor=user["email"],
+                    detail={"deleted": res.deleted_count})
+    return {"ok": True, "deleted": res.deleted_count}
+
+@api_router.get("/logs/export")
+async def export_logs(
+    user: dict = Depends(get_current_user),
+    format: str = "csv",
+    category: Optional[str] = None,
+    q: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+):
+    query = _log_query(category, q, start, end)
+    docs = await db.audit_logs.find(query).sort("ts", -1).to_list(100000)
+    items = [log_public(d) for d in docs]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    if format == "json":
+        return Response(
+            content=json.dumps(items, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="ossm-audit-{stamp}.json"'},
+        )
+    buf = StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["timestamp", "category", "action", "actor", "target", "detail", "ip"])
+    for it in items:
+        detail = it.get("detail")
+        detail = json.dumps(detail) if isinstance(detail, (dict, list)) else (detail or "")
+        writer.writerow([it.get("ts", ""), it.get("category", ""), it.get("action", ""),
+                         it.get("actor", ""), it.get("target", "") or "", detail, it.get("ip", "") or ""])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="ossm-audit-{stamp}.csv"'},
+    )
+
 @api_router.get("/")
 async def root():
     return {"message": "OSSM Bridge API"}
@@ -776,6 +905,8 @@ app.add_middleware(
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.access_codes.create_index("code", unique=True)
+    await db.audit_logs.create_index([("ts", -1)])
+    await db.audit_logs.create_index("category")
     await db.login_attempts.create_index("identifier", unique=True)
     s = await load_settings()
     hub.limits = {"min_depth": s["min_depth"], "max_speed": s["max_speed"]}

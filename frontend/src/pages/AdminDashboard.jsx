@@ -6,6 +6,7 @@ import { useBleHost } from "@/hooks/useBleHost";
 import { ControlConsole } from "@/components/ControlConsole";
 import { LiveQueue } from "@/components/LiveQueue";
 import { TwoFactorPanel } from "@/components/TwoFactorPanel";
+import { RecentActivity } from "@/components/RecentActivity";
 import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
 import {
@@ -202,6 +203,7 @@ export default function AdminDashboard() {
 
             <LiveQueue active={state.active} queue={state.queue} />
           </div>
+          <RecentActivity />
         </section>
 
         {/* Access codes */}

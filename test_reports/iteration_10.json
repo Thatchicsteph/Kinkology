@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 10 — verified the new Audit & Activity Log feature end-to-end. Added /app/backend/tests/test_audit_logs.py (10 tests) covering admin action events (login_success, code_created/extended/revoked/deleted, limits_updated, urls_updated, emergency_stop, session_skipped), login_failed + account_locked brute-force flow, WebSocket session events (device_connected/disconnected, guest_joined, guest_active, turn_ended), category/q/pagination filtering, CSV+JSON export with correct headers, and DELETE /api/logs clearing. Full backend suite is 69/69 (existing 59 unchanged + 10 new). Frontend: dashboard Recent Activity card renders and VIEW ALL navigates to /admin/logs; the /admin/logs page renders filter bar (search/category/dates/apply), events table, and total count; category=security filter correctly excludes session badges; text search works; CSV and JSON exports trigger downloads (ossm-audit.csv / ossm-audit.json); CLEAR ALL confirm dialog + toast + refresh works (total drops to 1 = just logs_cleared); DASHBOARD back button returns to /admin.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_audit_logs.py",
+    "/app/test_reports/pytest/iteration_10_results.xml",
+    "/app/test_reports/pytest/iteration_10_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "log_event() correctly wraps insert in try/except so audit-log writes never break the request path — good.",
+    "log_public() explicitly drops MongoDB _id and stringifies via str(_id) into 'id' — no ObjectId serialization issue.",
+    "GET /api/logs limit is safely clamped 1..500 and skip clamped to >=0 — bounds handled.",
+    "record_failure logs account_locked with actor=identifier (contains ip+scope+email), not the raw email; the UI displays the whole identifier. Minor UX nit: consider parsing actor for account_locked/twofa_* on the Logs UI to show just the email. Not blocking.",
+    "login_failed for non-existent users is logged with the submitted (lowercased) email as actor — matches PRD intent (audit brute-force attempts).",
+    "DELETE /api/logs deletes ALL entries then writes logs_cleared → total becomes 1 immediately (consistent with 'manual clear' UX and 'total <= small' assertion).",
+    "CSV header row matches the spec exactly: 'timestamp,category,action,actor,target,detail,ip'; Content-Disposition attachment header present."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_audit_logs.py (new)"
+  ],
+  "success_rate": {"backend": "100% (69/69)", "frontend": "100% (all requested log-page flows)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "During tests a few throwaway access codes (TEST_AUDIT, TEST_WS_AUDIT, TEST_Q) were created and deleted. Test also invoked DELETE /api/logs — the audit log is now effectively empty except for events generated after that (login_success from the RecentActivity poll, and the logs_cleared marker itself). If subsequent UI verification wants a populated Recent Activity card, main agent can just log in / create a code again.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "New regression file /app/backend/tests/test_audit_logs.py exercises the whole audit-log surface (logs API, filters, export, clear, plus all event-emitting endpoints and the host+guest WS lifecycle). Full backend regression command: `python -m pytest /app/backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml` — currently 69/69. UI selectors used: activity-log-card, view-all-logs-link, logs-page, logs-table, logs-back-button, log-total, log-search-input, log-filter-category, log-filter-start, log-filter-end, log-filter-apply, log-export-csv, log-export-json, log-clear-button, log-cat-security, log-cat-session, log-row-<action>. Note the test cleared the log; if you need pre-populated data, generate events first.",
+  "rca of the issue": "No bugs found. Only test-side adjustment: my initial throwaway email used 'TEST_' uppercase, but the backend lowercases emails before storing them as the actor, so equality checks failed until I lowercased the fixture and used substring match for the account_locked actor (which is the compound identifier '<ip>:login:<email>')."
+}
