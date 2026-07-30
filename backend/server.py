@@ -757,6 +757,16 @@ async def ws_host(ws: WebSocket):
             elif t == "ble_status":
                 if not data.get("connected"):
                     hub.device_state = "disconnected"
+            elif t == "owner_telemetry":
+                try:
+                    sp = int(data.get("speed"))
+                except (TypeError, ValueError):
+                    sp = None
+                if sp is not None:
+                    sp = max(0, min(100, sp))
+                    hub.telemetry["speed"] = sp
+                    hub._update_motion(sp)
+                    await hub.push_telemetry()
     except WebSocketDisconnect:
         pass
     except Exception:

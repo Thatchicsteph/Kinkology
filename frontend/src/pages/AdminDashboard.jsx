@@ -8,6 +8,7 @@ import { ControlConsole } from "@/components/ControlConsole";
 import { LiveQueue } from "@/components/LiveQueue";
 import { TwoFactorPanel } from "@/components/TwoFactorPanel";
 import { RecentActivity } from "@/components/RecentActivity";
+import { HeartRateSync } from "@/components/HeartRateSync";
 import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
 import {
@@ -308,6 +309,8 @@ export default function AdminDashboard() {
               </button>
             </div>
           </div>
+
+          <HeartRateSync hr={hr} ble={ble} maxCap={limits.max_speed} />
 
           <div className="hud-panel p-5 sm:p-6">
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-5">

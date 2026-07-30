@@ -92,5 +92,12 @@ export function useBleHost() {
     onDisconnected();
   }, [onDisconnected]);
 
-  return { connected, wsConnected, deviceName, connect, disconnect, writeCommand };
+  const sendHostMessage = useCallback((obj) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify(obj)); } catch (e) {}
+    }
+  }, []);
+
+  return { connected, wsConnected, deviceName, connect, disconnect, writeCommand, sendHostMessage };
 }
