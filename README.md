@@ -41,7 +41,9 @@ on your machine — Docker does **not** touch BLE.
 ### First run
 ```bash
 cd /path/to/ossm-bridge
-cp env.docker.example .env        # sets JWT_SECRET and DOMAIN
+cp env.docker.example .env        # template for JWT_SECRET and DOMAIN
+# edit .env → set DOMAIN, and set JWT_SECRET to a strong value (required):
+#   openssl rand -hex 32
 # edit .env → set DOMAIN to your public domain (used for the HTTPS certificate)
 docker compose up -d --build
 ```

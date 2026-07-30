@@ -13,8 +13,9 @@ Bluetooth stays in Chrome on your Mac — Docker does **not** touch BLE.
 ## First run
 ```bash
 cd /path/to/project
-cp env.docker.example .env        # sets JWT_SECRET and DOMAIN
+cp env.docker.example .env        # template for JWT_SECRET and DOMAIN
 # edit .env -> set DOMAIN to your public domain (for the HTTPS certificate)
+# and set JWT_SECRET to a strong random value (required):  openssl rand -hex 32
 docker compose up -d --build
 ```
 

@@ -13,7 +13,7 @@ services:
     environment:
       MONGO_URL: mongodb://mongo:27017
       DB_NAME: ossm_bridge
-      CORS_ORIGINS: "*"
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (copy env.docker.example to .env)}
     depends_on:
       - mongo

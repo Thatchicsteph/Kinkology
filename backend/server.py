@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
+from bson.errors import InvalidId
 from pymongo import ReturnDocument
 import bcrypt
 import jwt
@@ -64,8 +65,16 @@ def verify_password(plain: str, hashed: str) -> bool:
     except Exception:
         return False
 
+JWT_SECRET_PLACEHOLDER = "CHANGE_ME_run_openssl_rand_hex_32"
+
 def get_jwt_secret() -> str:
-    return os.environ["JWT_SECRET"]
+    secret = os.environ.get("JWT_SECRET")
+    if not secret or secret == JWT_SECRET_PLACEHOLDER:
+        raise RuntimeError(
+            "JWT_SECRET is missing or left as the placeholder. "
+            "Set a strong secret in .env (generate with: openssl rand -hex 32)."
+        )
+    return secret
 
 def create_access_token(user_id: str, email: str) -> str:
     payload = {"sub": user_id, "email": email,
@@ -475,7 +484,7 @@ async def setup_status():
     return {"needs_setup": count == 0}
 
 @api_router.post("/setup")
-async def setup_admin(body: SetupInput, response: Response):
+async def setup_admin(body: SetupInput, request: Request, response: Response):
     if await db.users.count_documents({}) > 0:
         raise HTTPException(status_code=403, detail="Setup already completed. Please sign in.")
     email = body.email.strip().lower()
@@ -497,7 +506,7 @@ async def setup_admin(body: SetupInput, response: Response):
     uid = str(res.inserted_id)
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
-                        samesite="none", max_age=604800, path="/")
+                        samesite="lax", max_age=604800, path="/")
     await log_event("security", "owner_created", actor=email, ip=client_ip(request))
     return {"token": token, "user": {"id": uid, "email": email, "name": "Admin"}}
 
@@ -517,7 +526,7 @@ async def login(body: LoginInput, request: Request, response: Response):
         return {"mfa_required": True, "mfa_token": create_mfa_token(uid, email)}
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
-                        samesite="none", max_age=604800, path="/")
+                        samesite="lax", max_age=604800, path="/")
     await log_event("security", "login_success", actor=email, ip=client_ip(request))
     return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", "Admin")}}
 
@@ -551,7 +560,7 @@ async def twofa_login(body: TwoFALogin, request: Request, response: Response):
     uid = str(user["_id"]); email = user["email"]
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
-                        samesite="none", max_age=604800, path="/")
+                        samesite="lax", max_age=604800, path="/")
     await log_event("security", "login_success",
                     actor=email, ip=client_ip(request),
                     detail={"method": "recovery_code" if body.recovery_code else "totp"})
@@ -664,29 +673,37 @@ async def list_codes(user: dict = Depends(get_current_user)):
     docs = await db.access_codes.find().sort("created_at", -1).to_list(500)
     return [code_public(d) for d in docs]
 
+def parse_object_id(code_id: str) -> ObjectId:
+    try:
+        return ObjectId(code_id)
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=404, detail="Not found")
+
 @api_router.post("/codes/{code_id}/revoke")
 async def revoke_code(code_id: str, user: dict = Depends(get_current_user)):
     doc = await db.access_codes.find_one_and_update(
-        {"_id": ObjectId(code_id)}, {"$set": {"revoked": True}})
+        {"_id": parse_object_id(code_id)}, {"$set": {"revoked": True}})
     if doc:
         await log_event("security", "code_revoked", actor=user["email"], target=doc.get("code"))
     return {"ok": True}
 
 @api_router.post("/codes/{code_id}/add-minutes")
 async def add_minutes(code_id: str, body: CodeCreate, user: dict = Depends(get_current_user)):
+    oid = parse_object_id(code_id)
     await db.access_codes.update_one(
-        {"_id": ObjectId(code_id)},
+        {"_id": oid},
         {"$inc": {"granted_seconds": body.minutes * 60}, "$set": {"revoked": False}},
     )
-    doc = await db.access_codes.find_one({"_id": ObjectId(code_id)})
+    doc = await db.access_codes.find_one({"_id": oid})
     await log_event("security", "code_extended", actor=user["email"],
                     target=doc.get("code") if doc else None, detail={"minutes": body.minutes})
     return code_public(doc)
 
 @api_router.delete("/codes/{code_id}")
 async def delete_code(code_id: str, user: dict = Depends(get_current_user)):
-    doc = await db.access_codes.find_one({"_id": ObjectId(code_id)})
-    await db.access_codes.delete_one({"_id": ObjectId(code_id)})
+    oid = parse_object_id(code_id)
+    doc = await db.access_codes.find_one({"_id": oid})
+    await db.access_codes.delete_one({"_id": oid})
     if doc:
         await log_event("security", "code_deleted", actor=user["email"], target=doc.get("code"))
     return {"ok": True}
@@ -695,12 +712,19 @@ async def delete_code(code_id: str, user: dict = Depends(get_current_user)):
 # Public: validate a code
 # ------------------------------------------------------------------
 @api_router.get("/access/{code}")
-async def validate_code(code: str):
+async def validate_code(code: str, request: Request):
+    ident = f"{client_ip(request)}:access"
+    await check_lockout(ident)
     doc = await db.access_codes.find_one({"code": code.upper()})
     if not doc or doc.get("revoked"):
+        await record_failure(ident)
         return {"valid": False}
     remaining = max(0, int(doc.get("granted_seconds", 0) - doc.get("used_seconds", 0)))
-    return {"valid": remaining > 0, "label": doc.get("label", ""), "remaining_seconds": remaining}
+    if remaining <= 0:
+        await record_failure(ident)
+        return {"valid": False, "label": doc.get("label", ""), "remaining_seconds": 0}
+    await clear_attempts(ident)
+    return {"valid": True, "label": doc.get("label", ""), "remaining_seconds": remaining}
 
 # ------------------------------------------------------------------
 # Safety settings (owner-set limits enforced server-side)
@@ -973,10 +997,21 @@ async def root():
 
 app.include_router(api_router)
 
+# CORS: default to same-origin only (the documented Caddy/Docker setup is single-origin).
+# Set CORS_ORIGINS to a comma-separated allowlist to enable credentialed cross-origin
+# requests. A literal '*' is allowed but forces credentials OFF (browsers reject '*'
+# with credentials, and reflecting arbitrary origins with credentials is a CSRF risk).
+_cors_env = os.environ.get('CORS_ORIGINS', '').strip()
+if _cors_env == '*':
+    _cors_origins, _cors_credentials = ['*'], False
+elif _cors_env:
+    _cors_origins, _cors_credentials = [o.strip() for o in _cors_env.split(',') if o.strip()], True
+else:
+    _cors_origins, _cors_credentials = [], True
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_credentials=_cors_credentials,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
