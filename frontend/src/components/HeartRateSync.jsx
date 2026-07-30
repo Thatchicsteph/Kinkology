@@ -56,6 +56,7 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
   const hrConnRef = useRef(hr.connected); hrConnRef.current = hr.connected;
   const commandRef = useRef(0);
   const lastSentRef = useRef(-1);
+  const wasOverRef = useRef(false);
 
   const setField = (k, v) =>
     setCfg((c) => ({ ...c, [k]: clamp(Number(v) || 0, 0, MAXES[k] ?? 100) }));
@@ -87,7 +88,14 @@ export function HeartRateSync({ hr, ble, maxCap, cutoff = 0 }) {
     const id = setInterval(() => {
       const c = cfgRef.current;
       const over = cutoffRef.current > 0 && hrConnRef.current && bpmRef.current >= cutoffRef.current;
-      if (over) { commandRef.current = 0; applySpeed(0); return; } // safety: instant stop
+      if (over) { wasOverRef.current = true; commandRef.current = 0; applySpeed(0); return; } // safety: instant stop
+      if (wasOverRef.current) {
+        // Just cleared the cutoff. The backend sends go:menu on trip, so make sure
+        // the device is back on the stroke engine screen before resuming speed —
+        // even if the backend's own resume command was missed (e.g. brief WS drop).
+        wasOverRef.current = false;
+        ble.writeCommand("go:strokeEngine");
+      }
       const error = Number(c.targetBpm) - bpmRef.current;        // >0 => below target, speed up
       const delta = clamp(Number(c.response) * error * dt, -Number(c.rampDown) * dt, Number(c.rampUp) * dt);
       const ceil = Math.min(Number(c.maxSpeed), Math.max(0, maxCapRef.current));
