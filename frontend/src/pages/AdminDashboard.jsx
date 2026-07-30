@@ -37,6 +37,8 @@ export default function AdminDashboard() {
   const [showTest, setShowTest] = useState(false);
   const [limits, setLimits] = useState({ min_depth: 0, max_speed: 100 });
   const [savingLimits, setSavingLimits] = useState(false);
+  const [urls, setUrls] = useState({ local_url: "", public_url: "" });
+  const [savingUrls, setSavingUrls] = useState(false);
   const pollRef = useRef(null);
 
   const loadCodes = async () => {
@@ -46,7 +48,22 @@ export default function AdminDashboard() {
     try { const { data } = await api.get("/session/state"); setState(data); } catch (e) {}
   };
   const loadLimits = async () => {
-    try { const { data } = await api.get("/settings"); setLimits(data); } catch (e) {}
+    try {
+      const { data } = await api.get("/settings");
+      setLimits({ min_depth: data.min_depth, max_speed: data.max_speed });
+      setUrls({ local_url: data.local_url || "", public_url: data.public_url || "" });
+    } catch (e) {}
+  };
+  const saveUrls = async () => {
+    setSavingUrls(true);
+    try {
+      const { data } = await api.put("/settings/urls", {
+        local_url: urls.local_url.trim(), public_url: urls.public_url.trim(),
+      });
+      setUrls({ local_url: data.local_url || "", public_url: data.public_url || "" });
+      toast.success("URLs saved");
+    } catch (e) { toast.error("Could not save URLs"); }
+    finally { setSavingUrls(false); }
   };
   const saveLimits = async () => {
     setSavingLimits(true);
@@ -84,8 +101,9 @@ export default function AdminDashboard() {
   const addMin = async (id) => { await api.post(`/codes/${id}/add-minutes`, { minutes: 10 }); loadCodes(); toast.success("+10 minutes"); };
   const del = async (id) => { await api.delete(`/codes/${id}`); loadCodes(); };
   const copyLink = (code) => {
-    navigator.clipboard.writeText(`${window.location.origin}/c/${code}`);
-    toast.success("Share link copied");
+    const base = (urls.public_url || window.location.origin).replace(/\/+$/, "");
+    navigator.clipboard.writeText(`${base}/c/${code}`);
+    toast.success("Guest link copied");
   };
 
   const stopAll = async () => { await api.post("/session/stop"); toast("Emergency stop sent", { icon: "⛔" }); };
@@ -194,7 +212,7 @@ export default function AdminDashboard() {
             </h2>
             <p className="text-[var(--ossm-text-2)] text-sm mb-4">Real-time graphs of run time, speed, depth, stroke &amp; sensation. Add as an OBS browser source or open on any screen.</p>
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/overlay`); toast.success("Overlay link copied"); }} data-testid="copy-overlay-link"
+              <button onClick={() => { const base = (urls.local_url || window.location.origin).replace(/\/+$/, ""); navigator.clipboard.writeText(`${base}/overlay`); toast.success("Overlay link copied"); }} data-testid="copy-overlay-link"
                 className="flex items-center gap-1.5 border border-[var(--ossm-overlay)] px-3 py-2 font-mono-data text-xs hover:border-[var(--ossm-cyan)]/50 hover:text-[var(--ossm-cyan)] transition-colors">
                 <Copy size={13} /> COPY LINK
               </button>
@@ -207,6 +225,30 @@ export default function AdminDashboard() {
           </div>
 
           <TwoFactorPanel />
+          <div className="hud-panel p-5 sm:p-6" data-testid="base-urls-card">
+            <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-2">
+              <Copy size={18} className="text-[var(--ossm-cyan)]" /> Base URLs
+            </h2>
+            <p className="text-[var(--ossm-text-2)] text-sm mb-5">Guest links use the public URL; the overlay link uses the local URL.</p>
+            <div className="space-y-4">
+              <div>
+                <label className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)]">LOCAL URL</label>
+                <input type="text" value={urls.local_url} onChange={(e) => setUrls((u) => ({ ...u, local_url: e.target.value }))}
+                  data-testid="local-url-input" placeholder="http://localhost"
+                  className="w-full mt-2 bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-3 py-2.5 font-mono-data text-sm outline-none focus:border-[var(--ossm-cyan)] transition-colors" />
+              </div>
+              <div>
+                <label className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)]">GLOBAL / PUBLIC URL</label>
+                <input type="text" value={urls.public_url} onChange={(e) => setUrls((u) => ({ ...u, public_url: e.target.value }))}
+                  data-testid="public-url-input" placeholder="https://your-domain.com"
+                  className="w-full mt-2 bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-3 py-2.5 font-mono-data text-sm outline-none focus:border-[var(--ossm-cyan)] transition-colors" />
+              </div>
+              <button onClick={saveUrls} disabled={savingUrls} data-testid="save-urls-button"
+                className="w-full bg-[var(--ossm-cyan)] text-[var(--ossm-base)] font-display font-bold tracking-[0.1em] py-3 active:scale-95 transition-transform disabled:opacity-50">
+                {savingUrls ? "SAVING…" : "SAVE URLS"}
+              </button>
+            </div>
+          </div>
           <div className="hud-panel p-5 sm:p-6" data-testid="safety-limits-card">
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-2">
               <Sliders size={18} className="text-[var(--ossm-cyan)]" /> Safety Limits

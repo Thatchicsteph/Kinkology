@@ -166,6 +166,8 @@ class LoginInput(BaseModel):
 class SetupInput(BaseModel):
     email: str
     password: str
+    local_url: Optional[str] = None
+    public_url: Optional[str] = None
 
 class TwoFAVerify(BaseModel):
     code: str
@@ -182,6 +184,10 @@ class CodeCreate(BaseModel):
 class SettingsInput(BaseModel):
     min_depth: int = Field(ge=0, le=100)
     max_speed: int = Field(ge=0, le=100)
+
+class UrlSettingsInput(BaseModel):
+    local_url: str = ""
+    public_url: str = ""
 
 def gen_code() -> str:
     alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -422,6 +428,13 @@ async def setup_admin(body: SetupInput, response: Response):
         "email": email, "password_hash": hash_password(body.password),
         "name": "Admin", "role": "admin", "created_at": datetime.now(timezone.utc).isoformat(),
     })
+    url_update = {}
+    if body.local_url is not None:
+        url_update["local_url"] = body.local_url.strip()
+    if body.public_url is not None:
+        url_update["public_url"] = body.public_url.strip()
+    if url_update:
+        await db.settings.update_one({"_id": "global"}, {"$set": url_update}, upsert=True)
     uid = str(res.inserted_id)
     token = create_access_token(uid, email)
     response.set_cookie("access_token", token, httponly=True, secure=True,
@@ -618,9 +631,14 @@ async def validate_code(code: str):
 async def load_settings() -> dict:
     doc = await db.settings.find_one({"_id": "global"})
     if not doc:
-        doc = {"_id": "global", "min_depth": 0, "max_speed": 100}
+        doc = {"_id": "global", "min_depth": 0, "max_speed": 100, "local_url": "", "public_url": ""}
         await db.settings.insert_one(doc)
-    return {"min_depth": int(doc.get("min_depth", 0)), "max_speed": int(doc.get("max_speed", 100))}
+    return {
+        "min_depth": int(doc.get("min_depth", 0)),
+        "max_speed": int(doc.get("max_speed", 100)),
+        "local_url": doc.get("local_url", "") or "",
+        "public_url": doc.get("public_url", "") or "",
+    }
 
 @api_router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
@@ -631,7 +649,13 @@ async def put_settings(body: SettingsInput, user: dict = Depends(get_current_use
     data = {"min_depth": body.min_depth, "max_speed": body.max_speed}
     await db.settings.update_one({"_id": "global"}, {"$set": data}, upsert=True)
     hub.limits = data
-    return data
+    return await load_settings()
+
+@api_router.put("/settings/urls")
+async def put_url_settings(body: UrlSettingsInput, user: dict = Depends(get_current_user)):
+    data = {"local_url": body.local_url.strip(), "public_url": body.public_url.strip()}
+    await db.settings.update_one({"_id": "global"}, {"$set": data}, upsert=True)
+    return await load_settings()
 
 # ------------------------------------------------------------------
 # Admin session control
@@ -753,7 +777,8 @@ async def startup():
     await db.users.create_index("email", unique=True)
     await db.access_codes.create_index("code", unique=True)
     await db.login_attempts.create_index("identifier", unique=True)
-    hub.limits = await load_settings()
+    s = await load_settings()
+    hub.limits = {"min_depth": s["min_depth"], "max_speed": s["max_speed"]}
     # Optional pre-seed for dev/preview when ADMIN_EMAIL + ADMIN_PASSWORD are set.
     # In self-hosted Docker these are left unset, so the owner creates the admin
     # account via the first-run setup flow (/api/setup).

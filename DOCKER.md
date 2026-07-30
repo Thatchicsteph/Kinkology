@@ -13,13 +13,22 @@ Bluetooth stays in Chrome on your Mac — Docker does **not** touch BLE.
 ## First run
 ```bash
 cd /path/to/project
-cp env.docker.example .env        # sets JWT_SECRET
+cp env.docker.example .env        # sets JWT_SECRET and DOMAIN
+# edit .env -> set DOMAIN to your public domain (for the HTTPS certificate)
 docker compose up -d --build
 ```
 
 Then open **http://localhost** in Chrome on the Mac.
 On the very first launch you'll be asked to **create the owner account**
-(email + password). After that you log in normally.
+(email + password) and set your **Local URL** and **Global/Public URL**:
+- **Local URL** — where you open the app on this Mac (e.g. `http://localhost`). Used for the OBS overlay link.
+- **Global/Public URL** — the public HTTPS address remote guests use (e.g. `https://tg30.ddns.net`). Guest share links are built from this.
+
+You can change both later in the dashboard ("Base URLs" card).
+
+> The `DOMAIN` in `.env` controls which domain Caddy fetches the TLS certificate
+> for. The Global URL you set at first login controls the links shown in the app.
+> Keep them consistent (same domain).
 
 - Owner (local, BLE works):  http://localhost
 - Remote guests (HTTPS):     https://tg30.ddns.net/c/CODE

@@ -26,8 +26,13 @@ export function AuthProvider({ children }) {
     return data.needs_setup;
   };
 
-  const setupAdmin = async (email, password) => {
-    const { data } = await api.post("/setup", { email, password });
+  const setupAdmin = async (email, password, localUrl, publicUrl) => {
+    const { data } = await api.post("/setup", {
+      email,
+      password,
+      local_url: localUrl,
+      public_url: publicUrl,
+    });
     localStorage.setItem("ossm_token", data.token);
     setUser(data.user);
     return data.user;

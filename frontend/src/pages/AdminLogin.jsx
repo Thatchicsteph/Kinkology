@@ -15,6 +15,8 @@ export default function AdminLogin() {
   // First-run setup step
   const [needsSetup, setNeedsSetup] = useState(null); // null=checking
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [localUrl, setLocalUrl] = useState("http://localhost");
+  const [publicUrl, setPublicUrl] = useState("");
 
   // 2FA step
   const [mfaToken, setMfaToken] = useState(null);
@@ -40,7 +42,7 @@ export default function AdminLogin() {
     }
     setLoading(true);
     try {
-      await setupAdmin(email, password);
+      await setupAdmin(email, password, localUrl.trim(), publicUrl.trim());
       navigate("/admin");
     } catch (err) {
       setError(formatApiErrorDetail(err.response?.data?.detail) || err.message);
@@ -129,6 +131,18 @@ export default function AdminLogin() {
               <label className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)]">CONFIRM PASSWORD</label>
               <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} data-testid="setup-confirm-password" required
                 className="w-full mt-2 bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-4 py-3 outline-none focus:border-[var(--ossm-cyan)] transition-colors" />
+            </div>
+            <div className="pt-2 border-t border-[var(--ossm-overlay)]">
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)]">LOCAL URL</label>
+              <input type="text" value={localUrl} onChange={(e) => setLocalUrl(e.target.value)} data-testid="setup-local-url" placeholder="http://localhost"
+                className="w-full mt-2 bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-4 py-3 font-mono-data text-sm outline-none focus:border-[var(--ossm-cyan)] transition-colors" />
+              <p className="text-[var(--ossm-muted)] text-xs mt-1.5">Where you open the app on this machine (owner + OBS overlay).</p>
+            </div>
+            <div>
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)]">GLOBAL / PUBLIC URL</label>
+              <input type="text" value={publicUrl} onChange={(e) => setPublicUrl(e.target.value)} data-testid="setup-public-url" placeholder="https://your-domain.com"
+                className="w-full mt-2 bg-[var(--ossm-base)] border border-[var(--ossm-overlay)] px-4 py-3 font-mono-data text-sm outline-none focus:border-[var(--ossm-cyan)] transition-colors" />
+              <p className="text-[var(--ossm-muted)] text-xs mt-1.5">Public HTTPS address remote guests use — guest links are built from this.</p>
             </div>
           </div>
 

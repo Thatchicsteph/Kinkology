@@ -361,7 +361,8 @@ class TestSettings:
 
         # GET reflects
         r2 = api.get(f"{BASE_URL}/api/settings")
-        assert r2.json() == {"min_depth": 40, "max_speed": 70}
+        j2 = r2.json()
+        assert j2["min_depth"] == 40 and j2["max_speed"] == 70
 
         # session/state includes limits
         r3 = api.get(f"{BASE_URL}/api/session/state")
@@ -377,7 +378,8 @@ class TestSettings:
     def test_reset_settings(self, api, auth):
         r = api.put(f"{BASE_URL}/api/settings", json={"min_depth": 0, "max_speed": 100})
         assert r.status_code == 200
-        assert r.json() == {"min_depth": 0, "max_speed": 100}
+        d = r.json()
+        assert d["min_depth"] == 0 and d["max_speed"] == 100
 
 
 # ---------- WebSocket server-side limit clamping ----------

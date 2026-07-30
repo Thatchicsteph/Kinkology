@@ -14,9 +14,9 @@
 	}
 }
 
-# Public HTTPS via Let's Encrypt.
-# Requires router port-forwards: 80 -> Mac and 443 -> Mac.
-tg30.ddns.net {
+# Public HTTPS via Let's Encrypt. Domain comes from the DOMAIN env var
+# (set it in .env). Requires router port-forwards: 80 -> Mac and 443 -> Mac.
+{$DOMAIN:tg30.ddns.net} {
 	import app
 }
 
