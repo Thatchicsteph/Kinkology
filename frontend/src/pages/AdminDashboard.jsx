@@ -135,7 +135,7 @@ export default function AdminDashboard() {
       {/* Device Host bar */}
       <div className="hud-panel p-5 sm:p-6 mb-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2">
               <Bluetooth size={18} className="text-[var(--ossm-cyan)]" /> Device Host
             </h2>
@@ -152,7 +152,9 @@ export default function AdminDashboard() {
                 {hr.connected ? `${hr.bpm} BPM` : "HR OFF"}
               </span>
               {ble.connected && state.device_state && (
-                <span className="font-mono-data text-xs text-[var(--ossm-muted)]">STATE: {state.device_state}</span>
+                <span className="font-mono-data text-xs text-[var(--ossm-muted)] max-w-[220px] truncate" title={state.device_state} data-testid="device-state-label">
+                  STATE: {state.device_state}
+                </span>
               )}
             </div>
             {!webBluetoothSupported() && (
@@ -161,7 +163,7 @@ export default function AdminDashboard() {
               </p>
             )}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             {hr.connected ? (
               <button onClick={hr.disconnect} data-testid="hr-disconnect-button" className="flex items-center gap-2 border border-[var(--ossm-hr)]/50 text-[var(--ossm-hr)] px-4 py-3 font-display text-xs tracking-[0.1em] active:scale-95 transition-transform">
                 <Heart size={16} className="hr-pulse" fill="currentColor" /> {hr.bpm} BPM
