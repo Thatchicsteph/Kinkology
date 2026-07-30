@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
 import { useBleHost } from "@/hooks/useBleHost";
+import { useHeartRate } from "@/hooks/useHeartRate";
 import { ControlConsole } from "@/components/ControlConsole";
 import { LiveQueue } from "@/components/LiveQueue";
 import { TwoFactorPanel } from "@/components/TwoFactorPanel";
@@ -11,7 +12,7 @@ import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
 import {
   Radio, LogOut, Bluetooth, BluetoothConnected, Power, SkipForward,
-  Plus, Copy, Trash2, Ban, Clock, Activity, Ticket, Sliders,
+  Plus, Copy, Trash2, Ban, Clock, Activity, Ticket, Sliders, Heart,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -30,6 +31,7 @@ export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const ble = useBleHost();
+  const hr = useHeartRate();
 
   const [codes, setCodes] = useState([]);
   const [state, setState] = useState({ active: null, queue: [], queue_length: 0, host_connected: false, device_state: "" });
@@ -141,6 +143,12 @@ export default function AdminDashboard() {
             <div className="flex flex-wrap items-center gap-3 mt-3">
               <StatusPill ok={ble.connected} okText={`BLE · ${ble.deviceName}`} offText="BLE DISCONNECTED" />
               <StatusPill ok={ble.wsConnected} okText="BRIDGE ONLINE" offText="BRIDGE OFFLINE" />
+              <span className={`inline-flex items-center gap-2 font-mono-data text-xs px-3 py-1.5 border ${
+                hr.connected ? "border-[var(--ossm-hr)]/50 text-[var(--ossm-hr)]" : "border-[var(--ossm-overlay)] text-[var(--ossm-muted)]"
+              }`} data-testid="hr-status">
+                <Heart size={13} className={hr.connected ? "hr-pulse" : ""} fill={hr.connected ? "currentColor" : "none"} />
+                {hr.connected ? `${hr.bpm} BPM` : "HR OFF"}
+              </span>
               {ble.connected && state.device_state && (
                 <span className="font-mono-data text-xs text-[var(--ossm-muted)]">STATE: {state.device_state}</span>
               )}
@@ -152,6 +160,15 @@ export default function AdminDashboard() {
             )}
           </div>
           <div className="flex items-center gap-3">
+            {hr.connected ? (
+              <button onClick={hr.disconnect} data-testid="hr-disconnect-button" className="flex items-center gap-2 border border-[var(--ossm-hr)]/50 text-[var(--ossm-hr)] px-4 py-3 font-display text-xs tracking-[0.1em] active:scale-95 transition-transform">
+                <Heart size={16} className="hr-pulse" fill="currentColor" /> {hr.bpm} BPM
+              </button>
+            ) : (
+              <button onClick={hr.connect} data-testid="hr-connect-button" className="flex items-center gap-2 border border-[var(--ossm-overlay)] px-4 py-3 font-display text-xs tracking-[0.1em] hover:border-[var(--ossm-hr)]/50 hover:text-[var(--ossm-hr)] transition-colors">
+                <Heart size={16} /> HEART RATE
+              </button>
+            )}
             {ble.connected && (
               <button onClick={() => setShowTest((s) => !s)} data-testid="toggle-test-console" className="flex items-center gap-2 border border-[var(--ossm-overlay)] px-4 py-3 font-display text-xs tracking-[0.1em] hover:border-[var(--ossm-cyan)]/40 transition-colors">
                 <Sliders size={16} /> {showTest ? "HIDE" : "TEST"} CONTROLS

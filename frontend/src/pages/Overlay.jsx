@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { WS_BASE, fmtTime } from "@/lib/api";
 import { Sparkline } from "@/components/Sparkline";
-import { Gauge, Ruler, Waves, Move3d, Activity, Radio } from "lucide-react";
+import { Gauge, Ruler, Waves, Move3d, Activity, Radio, Heart } from "lucide-react";
 
 const METRICS = [
   { key: "speed", label: "SPEED", color: "#FF2A5F", icon: Gauge },
@@ -12,6 +12,7 @@ const METRICS = [
 ];
 
 const CAP = 120; // rolling window points (~60s at 500ms)
+const HR_COLOR = "#FF4D6D";
 
 export default function Overlay() {
   const [params] = useSearchParams();
@@ -21,8 +22,9 @@ export default function Overlay() {
     speed: 0, depth: 0, stroke: 0, sensation: 0,
     run_seconds: 0, session_seconds: 0, running: false,
     controller: null, host_connected: false,
+    hr_bpm: 0, hr_connected: false,
   });
-  const [history, setHistory] = useState({ speed: [], depth: [], stroke: [], sensation: [] });
+  const [history, setHistory] = useState({ speed: [], depth: [], stroke: [], sensation: [], hr: [] });
   const [connected, setConnected] = useState(false);
   const latest = useRef(frame);
   latest.current = frame;
@@ -61,6 +63,7 @@ export default function Overlay() {
           depth: push(h.depth, f.depth),
           stroke: push(h.stroke, f.stroke),
           sensation: push(h.sensation, f.sensation),
+          hr: push(h.hr, f.hr_bpm || 0),
         };
       });
     }, 500);
@@ -107,6 +110,30 @@ export default function Overlay() {
           <p className="font-display text-[10px] tracking-[0.2em] text-[var(--ossm-muted)]">SESSION</p>
           <p className="font-mono-data font-bold text-2xl tabular-nums text-white" data-testid="overlay-session">{fmtTime(frame.session_seconds)}</p>
         </div>
+      </div>
+
+      {/* Heart rate */}
+      <div
+        data-testid="overlay-hr"
+        className="hud-panel px-6 py-5 mb-6"
+        style={transparent ? { background: "rgba(22,22,24,0.72)", backdropFilter: "blur(10px)" } : {}}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2.5">
+            <Heart
+              size={22}
+              style={{ color: HR_COLOR }}
+              className={frame.hr_connected && frame.hr_bpm > 0 ? "hr-pulse" : ""}
+              fill={frame.hr_connected && frame.hr_bpm > 0 ? "currentColor" : "none"}
+            />
+            <span className="font-display text-xs tracking-[0.18em]" style={{ color: HR_COLOR }}>HEART RATE</span>
+          </div>
+          <span className="font-mono-data font-extrabold text-4xl tabular-nums" style={{ color: HR_COLOR }} data-testid="overlay-hr-value">
+            {frame.hr_connected ? frame.hr_bpm : "--"}
+            <span className="text-sm text-[var(--ossm-muted)] ml-1">BPM</span>
+          </span>
+        </div>
+        <Sparkline data={history.hr} color={HR_COLOR} id="hr" height={72} max={200} />
       </div>
 
       {/* Metric graphs */}

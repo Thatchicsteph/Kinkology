@@ -9,6 +9,7 @@
   --ossm-overlay: #222225;
   --ossm-cyan: #00E5FF;
   --ossm-danger: #FF2A5F;
+  --ossm-hr: #FF4D6D;
   --ossm-text: #FFFFFF;
   --ossm-text-2: #A0A0A5;
   --ossm-muted: #5C5C60;
@@ -94,6 +95,14 @@ body::before {
   50% { opacity: 0.4; transform: scale(0.8); }
 }
 .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+
+@keyframes hr-beat {
+  0%, 100% { transform: scale(1); }
+  15% { transform: scale(1.35); }
+  30% { transform: scale(1); }
+  45% { transform: scale(1.2); }
+}
+.hr-pulse { animation: hr-beat 1s ease-in-out infinite; transform-origin: center; }
 
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(12px); }

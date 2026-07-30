@@ -1,10 +1,10 @@
 import React from "react";
 
 // Lightweight rolling line + area chart (no chart lib). data: array of 0-100 numbers.
-export function Sparkline({ data, color, height = 70, id }) {
+export function Sparkline({ data, color, height = 70, id, max = 100 }) {
   const W = 300;
   const H = height;
-  const MAX = 100;
+  const MAX = max;
   const gradId = `grad-${id}`;
 
   if (!data || data.length < 2) {

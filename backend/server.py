@@ -233,6 +233,7 @@ class Hub:
         self.limits: dict = {"min_depth": 0, "max_speed": 100}
         self.overlay_ws: set = set()
         self.telemetry: dict = {"speed": 0, "stroke": 0, "depth": 0, "sensation": 0}
+        self.hr: dict = {"bpm": 0, "connected": False}
         self.motion_accum: float = 0.0
         self.motion_start: Optional[float] = None
         self.lock = asyncio.Lock()
@@ -262,6 +263,8 @@ class Hub:
             "running": self.telemetry["speed"] > 0,
             "run_seconds": int(run),
             "session_seconds": session,
+            "hr_bpm": int(self.hr.get("bpm", 0)),
+            "hr_connected": bool(self.hr.get("connected", False)),
             **self.telemetry,
         }
 
@@ -807,6 +810,42 @@ async def ws_overlay(ws: WebSocket):
         pass
     finally:
         hub.overlay_ws.discard(ws)
+
+@app.websocket("/api/ws/hr")
+async def ws_hr(ws: WebSocket):
+    token = ws.query_params.get("token", "")
+    try:
+        decode_token(token)
+    except Exception:
+        await ws.close(code=4401)
+        return
+    await ws.accept()
+    hub.hr["connected"] = True
+    await hub.push_telemetry()
+    try:
+        while True:
+            data = await ws.receive_json()
+            if data.get("type") == "hr":
+                try:
+                    bpm = int(data.get("bpm", 0))
+                except (TypeError, ValueError):
+                    bpm = 0
+                hub.hr["bpm"] = max(0, min(300, bpm))
+                hub.hr["connected"] = True
+                await hub.push_telemetry()
+            elif data.get("type") == "hr_status":
+                hub.hr["connected"] = bool(data.get("connected"))
+                if not hub.hr["connected"]:
+                    hub.hr["bpm"] = 0
+                await hub.push_telemetry()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        hub.hr["connected"] = False
+        hub.hr["bpm"] = 0
+        await hub.push_telemetry()
 
 @api_router.get("/overlay/state")
 async def overlay_state():
