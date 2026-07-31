@@ -60,6 +60,9 @@ Self-hosted Docker has NO seeded admin — owner creates it via first-run setup.
 
 ## Implemented (2026-07-29)
 
+## Implemented (2026-07-31)
+- **MuSe / Love Spouse toy compatibility (researched + documented)**: investigated adding direct support for Love Spouse-protocol vibrators (model 5390 and similar "Chinese BLE toy" hardware). Confirmed via Buttplug's own protocol-documentation issue that these toys use one-way BLE *advertisement broadcasts* (11-byte manufacturer data, company ID `0xFFF0`) rather than a connectable GATT service — so neither Web Bluetooth (browser, used for the OSSM link) nor Intiface Central can address one directly; this rules out a same-pattern in-browser bridge like `useBleHost`. Existing open-source ESP32 gateway firmwares (LS-Buttplug, LVS-Gateway) solve this by emulating a Lovense toy to Intiface on one side and broadcasting the Love Spouse packets on the other — since `useToys`/`ButtplugClient` already speaks generic Buttplug WS (not Intiface-specific), no new client code is needed once such a gateway is on the network. Documented the setup path in `ToysPanel.jsx` (in-app copy) and `README.md`; no protocol/bridge code added in this app.
+
 ## Backlog
 - **P1**: Multi-device support; persistent queue across backend restarts; per-slider min/max safety caps set by owner.
 - **P1**: Reconnect resilience for guest WS (auto-retry).

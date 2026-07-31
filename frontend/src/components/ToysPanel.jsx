@@ -31,6 +31,21 @@ export function ToysPanel({ toys }) {
             </a>, then press "Start Server" in it before connecting below. Works standalone — no OSSM required —
             or synced to the OSSM's SPEED via the toggle once connected.
           </p>
+          <p className="text-[var(--ossm-text-2)] text-sm mt-2">
+            <span className="font-mono-data text-xs uppercase tracking-wide text-[var(--ossm-muted)]">MuSe / Love Spouse toys</span> —
+            these don't speak Bluetooth GATT (they only listen for BLE broadcasts), so neither a browser nor Intiface
+            can talk to one directly. A cheap ESP32 flashed with an open-source gateway firmware (e.g.{" "}
+            <a href="https://github.com/Fi0nee/LS-Buttplug" target="_blank" rel="noreferrer" className="underline hover:text-[var(--ossm-cyan)]">
+              LS-Buttplug
+            </a>{" "}
+            or{" "}
+            <a href="https://github.com/IngeniousKink/LVS-Gateway" target="_blank" rel="noreferrer" className="underline hover:text-[var(--ossm-cyan)]">
+              LVS-Gateway
+            </a>
+            ) sits in between: it broadcasts the Love Spouse commands on one side and shows up in Intiface Central as
+            a regular Lovense toy on the other. Once that's flashed and Intiface sees it, it works here exactly like
+            any other toy below — no separate setup in this app.
+          </p>
           <div className="flex flex-wrap items-center gap-3 mt-3">
             <StatusPill ok={toys.connected} okText="INTIFACE ONLINE" offText="INTIFACE OFFLINE" />
             {toys.connected && (

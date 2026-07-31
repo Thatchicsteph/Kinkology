@@ -152,6 +152,26 @@ no OSSM connected at all, or connect both together. The guest relay session
 Toy control stays entirely in the owner's browser + local Intiface process,
 same as the OSSM's BLE link — the backend never sees toy commands directly.
 
+### MuSe / Love Spouse toys (cheap "Chinese" BLE vibrators)
+
+These don't use standard Bluetooth GATT — the official app (and the toy
+itself) only speak in one-way BLE *advertisement broadcasts*, not a normal
+connect-and-write link. That means neither a browser (Web Bluetooth) nor
+Intiface Central can talk to one directly — this isn't a limitation of this
+app, it's how the hardware works.
+
+The fix is a small **ESP32 gateway**, flashed with one of the existing
+open-source firmwares for this exact protocol:
+- [LS-Buttplug](https://github.com/Fi0nee/LS-Buttplug) (PlatformIO project,
+  active development, English + Russian docs)
+- [LVS-Gateway](https://github.com/IngeniousKink/LVS-Gateway)
+
+Once flashed, the ESP32 sits in the middle: it shows up over Bluetooth to
+Intiface Central as a normal Lovense toy, and on its other side it broadcasts
+the Love Spouse advertisement packets the real toy listens for. From here on
+it's identical to any other Intiface-connected toy — follow the **Toys**
+setup steps above, no extra configuration in this app.
+
 ## Key routes
 
 | Route            | Description |
