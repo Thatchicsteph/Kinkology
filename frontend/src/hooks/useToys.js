@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { ButtplugClient, DEFAULT_INTIFACE_WS } from "@/lib/buttplug";
+import { getPattern } from "@/lib/vibrationPatterns";
 import { toast } from "sonner";
 
 // Manages the connection to a local Intiface Engine (Lovense + other
@@ -9,7 +10,18 @@ export function useToys() {
   const clientRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [devices, setDevices] = useState([]);
-  const [linked, setLinked] = useState(true); // mirror OSSM SPEED as vibration intensity
+  const [linked, setLinkedState] = useState(true); // mirror OSSM SPEED as vibration intensity
+
+  const [activePattern, setActivePattern] = useState(null); // pattern id, or null
+  const patternRef = useRef({ intervalId: null, startedAt: 0 });
+
+  const stopPattern = useCallback(() => {
+    if (patternRef.current.intervalId) {
+      clearInterval(patternRef.current.intervalId);
+      patternRef.current.intervalId = null;
+    }
+    setActivePattern(null);
+  }, []);
 
   const connect = useCallback(async (url = DEFAULT_INTIFACE_WS) => {
     const client = new ButtplugClient(url);
@@ -17,6 +29,7 @@ export function useToys() {
     client.onDisconnected = () => {
       setConnected(false);
       setDevices([]);
+      stopPattern();
     };
     try {
       await client.connect();
@@ -27,22 +40,56 @@ export function useToys() {
     } catch (e) {
       toast.error(e.message || "Could not connect to Intiface Engine");
     }
-  }, []);
+  }, [stopPattern]);
 
   const disconnect = useCallback(() => {
+    stopPattern();
     clientRef.current?.disconnect();
     clientRef.current = null;
     setConnected(false);
     setDevices([]);
-  }, []);
+  }, [stopPattern]);
 
   const setDeviceIntensity = useCallback((index, value01) => {
+    stopPattern(); // a manual nudge always takes over from a running pattern
     clientRef.current?.vibrate(index, value01).catch((e) => console.error("toy vibrate failed", e));
-  }, []);
+  }, [stopPattern]);
 
   const stopAllToys = useCallback(() => {
+    stopPattern();
     clientRef.current?.stopAll().catch((e) => console.error("toy stop-all failed", e));
+  }, [stopPattern]);
+
+  // Runs a named preset (see lib/vibrationPatterns.js) against every
+  // connected toy until stopPattern() is called, another pattern is
+  // started, a manual slider nudge happens, or the toy disconnects.
+  // Only meaningful in manual mode — starting a pattern turns SPEED-link
+  // off so the two engines can't fight over the same toy.
+  const startPattern = useCallback((patternId) => {
+    const pattern = getPattern(patternId);
+    if (!pattern) return;
+    const client = clientRef.current;
+    if (!client) return;
+
+    if (patternRef.current.intervalId) clearInterval(patternRef.current.intervalId);
+    setLinkedState(false);
+
+    const startedAt = Date.now();
+    patternRef.current.startedAt = startedAt;
+    const tick = () => {
+      const t = Date.now() - startedAt;
+      const intensity = Math.min(1, Math.max(0, pattern.intensityAt(t)));
+      client.list().forEach((d) => client.vibrate(d.index, intensity).catch(() => {}));
+    };
+    tick();
+    patternRef.current.intervalId = setInterval(tick, pattern.tickMs || 150);
+    setActivePattern(patternId);
   }, []);
+
+  const setLinked = useCallback((value) => {
+    if (value) stopPattern(); // linking to SPEED takes back control from any running pattern
+    setLinkedState(value);
+  }, [stopPattern]);
 
   // Fed every OSSM command string (owner test console, guest relay, auto
   // programs — they all funnel through one place). When linked, mirrors
@@ -66,6 +113,9 @@ export function useToys() {
     disconnect,
     setDeviceIntensity,
     stopAllToys,
+    activePattern,
+    startPattern,
+    stopPattern,
     handleCommand,
   };
 }

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { Vibrate, Link2, Unlink, Power, PlugZap } from "lucide-react";
+import { Vibrate, Link2, Unlink, Power, PlugZap, Square, Play } from "lucide-react";
 import { DEFAULT_INTIFACE_WS } from "@/lib/buttplug";
+import { VIBRATION_PATTERNS } from "@/lib/vibrationPatterns";
 
 function StatusPill({ ok, okText, offText }) {
   return (
@@ -112,12 +113,60 @@ export function ToysPanel({ toys }) {
       )}
 
       {toys.connected && toys.devices.length > 0 && (
+        <div className="mt-6 pt-6 border-t border-[var(--ossm-overlay)]">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <span className="font-mono-data text-xs uppercase tracking-wide text-[var(--ossm-muted)]">
+              Vibration Patterns
+            </span>
+            {toys.activePattern && (
+              <button
+                onClick={toys.stopPattern}
+                data-testid="toys-pattern-stop-button"
+                className="flex items-center gap-1.5 border border-[var(--ossm-overlay)] px-3 py-1.5 font-mono-data text-xs hover:border-[var(--ossm-danger)]/50 hover:text-[var(--ossm-danger)] transition-colors"
+              >
+                <Square size={12} /> STOP PATTERN
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2" data-testid="toys-pattern-list">
+            {VIBRATION_PATTERNS.map((p) => {
+              const active = toys.activePattern === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => toys.startPattern(p.id)}
+                  data-testid={`toys-pattern-${p.id}`}
+                  title={p.description}
+                  className={`flex items-center gap-1.5 border px-3 py-2 font-display text-xs tracking-[0.08em] transition-colors ${
+                    active
+                      ? "border-[var(--ossm-cyan)]/60 text-[var(--ossm-cyan)] glow-cyan"
+                      : "border-[var(--ossm-overlay)] text-[var(--ossm-text-2)] hover:border-[var(--ossm-cyan)]/40"
+                  }`}
+                >
+                  {active ? <Vibrate size={12} className="pulse-dot" /> : <Play size={12} />} {p.label.toUpperCase()}
+                </button>
+              );
+            })}
+          </div>
+          {toys.linked && (
+            <p className="font-mono-data text-[11px] text-[var(--ossm-muted)] mt-2">
+              Starting a pattern switches toys out of LINKED TO SPEED and into manual mode.
+            </p>
+          )}
+        </div>
+      )}
+
+      {toys.connected && toys.devices.length > 0 && (
         <div className="mt-6 pt-6 border-t border-[var(--ossm-overlay)] space-y-4">
           {toys.devices.map((d) => (
             <div key={d.index} className="flex items-center justify-between gap-4" data-testid={`toy-row-${d.index}`}>
               <span className="font-mono-data text-sm text-[var(--ossm-text-2)] truncate">{d.name}</span>
               {toys.linked ? (
                 <span className="font-mono-data text-xs text-[var(--ossm-cyan)]">mirrors SPEED</span>
+              ) : toys.activePattern ? (
+                <span className="font-mono-data text-xs text-[var(--ossm-cyan)]">
+                  running {toys.activePattern}
+                </span>
               ) : (
                 <input
                   type="range"
