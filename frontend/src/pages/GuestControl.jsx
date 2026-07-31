@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, WS_BASE, fmtTime } from "@/lib/api";
 import { ControlConsole } from "@/components/ControlConsole";
+import { ControlsGuide } from "@/components/ControlsGuide";
 import { TimerDisplay } from "@/components/TimerDisplay";
 import { Radio, Loader2, XCircle, Clock, Users } from "lucide-react";
 import { toast } from "sonner";
@@ -142,6 +143,9 @@ export default function GuestControl() {
         </div>
         <div className="hud-panel p-6 mt-4">
           <ControlConsole onCommand={sendCommand} disabled={false} limits={snap.limits} />
+        </div>
+        <div className="hud-panel p-6 mt-4">
+          <ControlsGuide />
         </div>
       </div>
     </Shell>
