@@ -3,38 +3,41 @@ import { BookOpen, ChevronDown, Gauge, Move3d, Waves, Ruler } from "lucide-react
 
 const SPEED = {
   icon: Gauge,
-  title: "Speed Control",
-  intro: "The left encoder always controls speed, regardless of which mode is active.",
+  title: "Speed",
+  intro: "The SPEED slider sets how fast the OSSM moves. It applies at all times, whatever the other sliders are set to.",
   param: { name: "Speed", range: "0–100%", default: "0%" },
   bullets: [
-    "Turn clockwise to increase speed",
-    "Turn counter-clockwise to decrease speed",
-    "The encoder has acceleration: faster turns make bigger changes",
+    "Drag right to increase speed, left to decrease",
+    "The number above the slider shows the current value",
+    "If the owner set a speed limit, the slider stops at that maximum (shown as “max N”)",
   ],
-  note: "Speed must be above 0% for the OSSM to move. When paused, increase speed to resume automatically.",
+  note: "Speed must be above 0% for the OSSM to move. Press START to begin — if speed is still 0%, it starts at 30%.",
 };
 
 const MODES = [
   {
     icon: Move3d,
-    title: "Depth Mode",
+    title: "Depth",
     intro: "Controls how deep the penetration reaches.",
-    param: { name: "Depth", range: "0–100%", default: "10%" },
-    bullets: ["Higher values = deeper penetration", "The depth is visualized on the linear rail graph"],
-  },
-  {
-    icon: Waves,
-    title: "Sensation Mode",
-    intro: "Controls the intensity or “feel” of the motion.",
-    param: { name: "Sensation", range: "0–100%", default: "50%" },
-    bullets: ["Lower values = gentler, smoother motion", "Higher values = more intense, aggressive motion"],
+    param: { name: "Depth", range: "0–100%", default: "60%" },
+    bullets: [
+      "Higher values = deeper penetration",
+      "If the owner set a minimum depth, the slider starts at that value (shown as “min N”)",
+    ],
   },
   {
     icon: Ruler,
-    title: "Stroke Mode",
+    title: "Stroke",
     intro: "Controls the length of each stroke.",
-    param: { name: "Stroke", range: "0–100%", default: "50%" },
-    bullets: ["Lower values = shorter strokes", "Higher values = longer strokes", "The stroke is visualized on the linear rail graph"],
+    param: { name: "Stroke", range: "0–100%", default: "60%" },
+    bullets: ["Lower values = shorter strokes", "Higher values = longer strokes"],
+  },
+  {
+    icon: Waves,
+    title: "Sensation",
+    intro: "Controls the intensity or “feel” of the motion.",
+    param: { name: "Sensation", range: "0–100%", default: "50%" },
+    bullets: ["Lower values = gentler, smoother motion", "Higher values = more intense, aggressive motion"],
   },
 ];
 
@@ -99,15 +102,22 @@ export function ControlsGuide() {
         <div className="mt-5 space-y-7" data-testid="controls-guide-body">
           <Section item={SPEED} />
           <div>
-            <span className="font-display text-xs tracking-[0.15em] text-white">ADJUSTMENT MODES</span>
+            <span className="font-display text-xs tracking-[0.15em] text-white">THE OTHER SLIDERS</span>
             <p className="text-[var(--ossm-text-2)] text-sm mt-2">
-              The right encoder controls one of three parameters, depending on which mode is active. Use the shoulder
-              bumpers to switch modes.
+              Depth, stroke and sensation each have their own slider — adjust any of them at any time and the change is
+              sent to the device immediately.
             </p>
           </div>
           {MODES.map((m) => (
             <Section key={m.title} item={m} />
           ))}
+          <div>
+            <span className="font-display text-xs tracking-[0.15em] text-white">PATTERNS &amp; AUTO PROGRAMS</span>
+            <p className="text-[var(--ossm-text-2)] text-sm mt-2">
+              Tap a pattern to change the motion shape. Auto programs move the sliders for you — touching any slider or
+              pressing STOP hands control back to you.
+            </p>
+          </div>
           <a
             href="https://docs.researchanddesire.com/radr/guides/user-guide/ossm-controls"
             target="_blank"
