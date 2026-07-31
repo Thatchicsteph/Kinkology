@@ -3,7 +3,7 @@ import { WS_BASE, API } from "@/lib/api";
 import { OSSM } from "@/lib/ossm";
 import { toast } from "sonner";
 
-export function useBleHost() {
+export function useBleHost({ onCommand } = {}) {
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [wsConnected, setWsConnected] = useState(false);
@@ -13,6 +13,11 @@ export function useBleHost() {
   const lastCmdRef = useRef("");
 
   const writeCommand = useCallback(async (command) => {
+    // Fires for every command regardless of OSSM connection state, so linked
+    // toys (Lovense/etc via Intiface) still work even without an OSSM present.
+    if (onCommand) {
+      try { onCommand(command); } catch (e) { console.error("onCommand handler failed", e); }
+    }
     const char = cmdCharRef.current;
     if (!char) return;
     try {
@@ -23,9 +28,11 @@ export function useBleHost() {
     } catch (e) {
       console.error("BLE write failed", command, e);
     }
-  }, []);
+  }, [onCommand]);
 
   const openHostWs = useCallback(() => {
+    // Idempotent — safe to call whenever either an OSSM or toys become active.
+    if (wsRef.current && (wsRef.current.readyState === 0 || wsRef.current.readyState === 1)) return;
     const token = localStorage.getItem("ossm_token");
     const ws = new WebSocket(`${WS_BASE}/api/ws/host?token=${token}`);
     wsRef.current = ws;
@@ -39,13 +46,22 @@ export function useBleHost() {
     };
   }, [writeCommand]);
 
+  const closeHostWs = useCallback(() => {
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch (e) {}
+      wsRef.current = null;
+    }
+    setWsConnected(false);
+  }, []);
+
   const onDisconnected = useCallback(() => {
     setConnected(false);
     cmdCharRef.current = null;
-    if (wsRef.current) {
+    // Note: the host session (guest relay) is intentionally left open here —
+    // toys may still be connected and synced, so the caller decides whether
+    // to closeHostWs() once nothing is active.
+    if (wsRef.current && wsRef.current.readyState === 1) {
       try { wsRef.current.send(JSON.stringify({ type: "ble_status", connected: false })); } catch (e) {}
-      wsRef.current.close();
-      wsRef.current = null;
     }
     toast.error("Device disconnected");
   }, []);
@@ -80,12 +96,11 @@ export function useBleHost() {
 
       setDeviceName(device.name || "OSSM");
       setConnected(true);
-      openHostWs();
       toast.success(`Connected to ${device.name || "OSSM"}`);
     } catch (e) {
       if (e && e.name !== "NotFoundError") toast.error(`Connection failed: ${e.message}`);
     }
-  }, [onDisconnected, openHostWs]);
+  }, [onDisconnected]);
 
   const disconnect = useCallback(() => {
     if (deviceRef.current?.gatt?.connected) deviceRef.current.gatt.disconnect();
@@ -99,5 +114,5 @@ export function useBleHost() {
     }
   }, []);
 
-  return { connected, wsConnected, deviceName, connect, disconnect, writeCommand, sendHostMessage };
+  return { connected, wsConnected, deviceName, connect, disconnect, writeCommand, sendHostMessage, openHostWs, closeHostWs };
 }

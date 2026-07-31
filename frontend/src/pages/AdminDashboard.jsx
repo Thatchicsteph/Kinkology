@@ -4,11 +4,13 @@ import { useAuth } from "@/context/AuthContext";
 import { api } from "@/lib/api";
 import { useBleHost } from "@/hooks/useBleHost";
 import { useHeartRate } from "@/hooks/useHeartRate";
+import { useToys } from "@/hooks/useToys";
 import { ControlConsole } from "@/components/ControlConsole";
 import { LiveQueue } from "@/components/LiveQueue";
 import { TwoFactorPanel } from "@/components/TwoFactorPanel";
 import { RecentActivity } from "@/components/RecentActivity";
 import { HeartRateSync } from "@/components/HeartRateSync";
+import { ToysPanel } from "@/components/ToysPanel";
 import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
 import {
@@ -31,7 +33,8 @@ function StatusPill({ ok, okText, offText }) {
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const ble = useBleHost();
+  const toys = useToys();
+  const ble = useBleHost({ onCommand: toys.handleCommand });
   const hr = useHeartRate();
 
   const [codes, setCodes] = useState([]);
@@ -90,6 +93,18 @@ export default function AdminDashboard() {
     return () => clearInterval(pollRef.current);
     // eslint-disable-next-line
   }, []);
+
+  // The host relay session (used to forward guest/owner commands) should be
+  // open whenever either an OSSM is connected or toys are connected/synced —
+  // not only when an OSSM is present. This lets guests run toys-only sessions.
+  useEffect(() => {
+    if (ble.connected || toys.connected) {
+      ble.openHostWs();
+    } else {
+      ble.closeHostWs();
+    }
+    // eslint-disable-next-line
+  }, [ble.connected, toys.connected]);
 
   const createCode = async (e) => {
     e.preventDefault();
@@ -173,7 +188,7 @@ export default function AdminDashboard() {
                 <Heart size={16} /> HEART RATE
               </button>
             )}
-            {ble.connected && (
+            {(ble.connected || toys.connected) && (
               <button onClick={() => setShowTest((s) => !s)} data-testid="toggle-test-console" className="flex items-center gap-2 border border-[var(--ossm-overlay)] px-4 py-3 font-display text-xs tracking-[0.1em] hover:border-[var(--ossm-cyan)]/40 transition-colors">
                 <Sliders size={16} /> {showTest ? "HIDE" : "TEST"} CONTROLS
               </button>
@@ -190,13 +205,17 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {ble.connected && showTest && (
+        {(ble.connected || toys.connected) && showTest && (
           <div className="mt-6 pt-6 border-t border-[var(--ossm-overlay)] max-w-md" data-testid="owner-test-console">
-            <p className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)] mb-4">OWNER TEST CONTROLS — DIRECT TO DEVICE</p>
+            <p className="font-display text-xs tracking-[0.15em] text-[var(--ossm-text-2)] mb-4">
+              OWNER TEST CONTROLS — DIRECT TO {ble.connected && toys.connected ? "DEVICE + TOYS" : ble.connected ? "DEVICE" : "TOYS"}
+            </p>
             <ControlConsole onCommand={ble.writeCommand} limits={limits} />
           </div>
         )}
       </div>
+
+      <ToysPanel toys={toys} />
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Live session monitor */}

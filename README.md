@@ -120,6 +120,38 @@ Open `http://localhost:3000`. With no seeded admin, the first visit to
 
 ---
 
+## Toys — Lovense & other Bluetooth vibrating toys
+
+The owner dashboard has a **Toys** panel alongside the Device Host bar. Rather
+than hand-rolling a different Bluetooth protocol per toy brand (they vary a
+lot), it connects to **[Intiface Central](https://intiface.com)** — a free,
+open-source local app (built on the [Buttplug](https://buttplug.io) protocol)
+that already knows how to talk to Lovense and dozens of other brands over
+Bluetooth. This app effectively becomes the "toy" equivalent of the browser's
+Web Bluetooth link to the OSSM.
+
+**Toys work independently of the OSSM** — you can run a toy-only session with
+no OSSM connected at all, or connect both together. The guest relay session
+(the "Bridge") comes online whenever *either* the OSSM or Toys are connected.
+
+**Setup:**
+1. Install and open Intiface Central on the same machine as the owner's
+   browser, then press **Start Server** (default `ws://127.0.0.1:12345`).
+2. Put your toy(s) in pairing mode.
+3. In the OSSM Bridge owner dashboard, click **Connect Toys**. Found toys
+   appear automatically — no OSSM connection required.
+4. Choose a mode with the **LINKED TO SPEED / MANUAL** toggle:
+   - **Linked to Speed** — every connected toy mirrors the app's `SPEED`
+     control as vibration intensity. This is the "sync with OSSM" option:
+     if an OSSM is also connected and running, toys ramp up and down with its
+     stroke speed automatically, driven by whatever is setting SPEED (a
+     guest, the owner's test console, or an auto program).
+   - **Manual** — drive each toy's intensity independently with its own
+     slider, regardless of what the OSSM is doing.
+
+Toy control stays entirely in the owner's browser + local Intiface process,
+same as the OSSM's BLE link — the backend never sees toy commands directly.
+
 ## Key routes
 
 | Route            | Description |
