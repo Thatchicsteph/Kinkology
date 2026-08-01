@@ -8,7 +8,9 @@ Bluetooth stays in Chrome on your Mac — Docker does **not** touch BLE.
 ## Prerequisites
 - Docker Desktop installed and running.
 - (For remote guests) Router port-forwards: **80 → Mac** and **443 → Mac**, and
-  the DDNS name `tg30.ddns.net` pointing at your public IP.
+  your own domain (DDNS or otherwise) pointing at your public IP. This guide
+  uses `ChangeMe` as a placeholder — replace it with your real domain
+  everywhere it appears.
 
 ## First run
 ```bash
@@ -23,7 +25,7 @@ Then open **http://localhost** in Chrome on the Mac.
 On the very first launch you'll be asked to **create the owner account**
 (email + password) and set your **Local URL** and **Global/Public URL**:
 - **Local URL** — where you open the app on this Mac (e.g. `http://localhost`). Used for the OBS overlay link.
-- **Global/Public URL** — the public HTTPS address remote guests use (e.g. `https://tg30.ddns.net`). Guest share links are built from this.
+- **Global/Public URL** — the public HTTPS address remote guests use (e.g. `https://ChangeMe` — replace with your own domain). Guest share links are built from this.
 
 You can change both later in the dashboard ("Base URLs" card).
 
@@ -32,7 +34,7 @@ You can change both later in the dashboard ("Base URLs" card).
 > Keep them consistent (same domain).
 
 - Owner (local, BLE works):  http://localhost
-- Remote guests (HTTPS):     https://tg30.ddns.net/c/CODE
+- Remote guests (HTTPS):     https://ChangeMe/c/CODE
 
 > Web Bluetooth only works on `localhost` or `https://`, so the owner must use
 > `http://localhost` (or the HTTPS domain) — never a plain `http://<ip>`.
@@ -51,8 +53,9 @@ docker compose up -d --build    # rebuild after pulling code changes
 - The services use `restart: unless-stopped`, so they auto-start with Docker.
 
 ## HTTPS certificate notes
-Caddy fetches a Let's Encrypt cert for `tg30.ddns.net` automatically on first
-request **once ports 80 and 443 reach the Mac**. If the cert isn't issued:
+Caddy fetches a Let's Encrypt cert for your `DOMAIN` (set in `.env` — `ChangeMe`
+is just a placeholder) automatically on first request **once ports 80 and 443
+reach the Mac**. If the cert isn't issued:
 - Confirm the domain resolves to your current public IP.
 - Confirm your router forwards 80 and 443 to this Mac.
 - Check `docker compose logs -f web` for ACME errors.

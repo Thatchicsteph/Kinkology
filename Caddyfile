@@ -2,7 +2,8 @@
 # Requires router port-forwards: 80 -> Mac and 443 -> Mac (for auto HTTPS).
 # Run with:  caddy run --config ./Caddyfile
 
-tg30.ddns.net {
+# Replace ChangeMe below with your own public domain.
+ChangeMe {
     # API + WebSocket -> FastAPI backend (WebSocket upgrade handled automatically)
     handle /api/* {
         reverse_proxy localhost:8001

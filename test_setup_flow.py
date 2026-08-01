@@ -22,7 +22,7 @@ async def main():
         r = await c.post("/api/setup", json={"email": "owner@test.com", "password": "short"})
         print("weak-pass:", r.status_code); assert r.status_code == 400
 
-        r = await c.post("/api/setup", json={"email": "Owner@Test.com", "password": "supersecret1", "local_url": "http://localhost", "public_url": "https://tg30.ddns.net"})
+        r = await c.post("/api/setup", json={"email": "Owner@Test.com", "password": "supersecret1", "local_url": "http://localhost", "public_url": "https://ChangeMe"})
         print("setup ok:", r.status_code, r.json().get("user")); assert r.status_code == 200 and r.json()["user"]["email"] == "owner@test.com"
 
         r = await c.get("/api/setup/status")
@@ -38,7 +38,7 @@ async def main():
 
         r = await c.get("/api/settings", headers=h)
         print("settings:", r.json())
-        assert r.json()["local_url"] == "http://localhost" and r.json()["public_url"] == "https://tg30.ddns.net"
+        assert r.json()["local_url"] == "http://localhost" and r.json()["public_url"] == "https://ChangeMe"
 
         r = await c.put("/api/settings/urls", headers=h, json={"local_url": "http://localhost:8080", "public_url": "https://new.example.com"})
         print("urls updated:", r.json())

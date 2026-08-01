@@ -27,7 +27,7 @@ services:
         REACT_APP_BACKEND_URL: ""
     restart: unless-stopped
     environment:
-      DOMAIN: ${DOMAIN:-tg30.ddns.net}
+      DOMAIN: ${DOMAIN:-ChangeMe}
     ports:
       - "80:80"
       - "443:443"
