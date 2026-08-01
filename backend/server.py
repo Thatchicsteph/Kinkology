@@ -219,6 +219,8 @@ class SettingsInput(BaseModel):
     min_depth: int = Field(ge=0, le=100)
     max_speed: int = Field(ge=0, le=100)
     hr_cutoff: int = Field(ge=0, le=300, default=0)
+    toy_length_mm: int = Field(ge=0, le=2000, default=0)
+    rail_travel_mm: int = Field(ge=1, le=2000, default=300)
 
 class UrlSettingsInput(BaseModel):
     local_url: str = ""
@@ -227,6 +229,12 @@ class UrlSettingsInput(BaseModel):
 def gen_code() -> str:
     alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
     return "".join(secrets.choice(alphabet) for _ in range(6))
+
+def compute_toy_max_depth(toy_length_mm: int, rail_travel_mm: int) -> int:
+    """0 means Toy Mode is off (no cap beyond the normal 0-100 range)."""
+    if not toy_length_mm or not rail_travel_mm:
+        return 100
+    return max(0, min(100, round((toy_length_mm / rail_travel_mm) * 100)))
 
 # ------------------------------------------------------------------
 # Realtime hub: relays control from active guest -> host (device holder)
@@ -240,7 +248,7 @@ class Hub:
         self.active_start: Optional[float] = None
         self.active_remaining_start: int = 0
         self.device_state: str = ""
-        self.limits: dict = {"min_depth": 0, "max_speed": 100}
+        self.limits: dict = {"min_depth": 0, "max_speed": 100, "max_depth": 100}
         self.hr_cutoff: int = 0
         self.hr_over: bool = False
         self.pre_cutoff_speed: int = 0
@@ -346,6 +354,8 @@ class Hub:
         kind, val = m.group(1), int(m.group(2))
         if kind == "depth" and val < self.limits.get("min_depth", 0):
             return f'set:depth:{self.limits["min_depth"]}'
+        if kind == "depth" and val > self.limits.get("max_depth", 100):
+            return f'set:depth:{self.limits["max_depth"]}'
         if kind == "speed" and val > self.limits.get("max_speed", 100):
             return f'set:speed:{self.limits["max_speed"]}'
         return cmd
@@ -761,10 +771,15 @@ async def load_settings() -> dict:
     if not doc:
         doc = {"_id": "global", "min_depth": 0, "max_speed": 100, "local_url": "", "public_url": ""}
         await db.settings.insert_one(doc)
+    toy_length_mm = int(doc.get("toy_length_mm", 0))
+    rail_travel_mm = int(doc.get("rail_travel_mm", 300))
     return {
         "min_depth": int(doc.get("min_depth", 0)),
         "max_speed": int(doc.get("max_speed", 100)),
         "hr_cutoff": int(doc.get("hr_cutoff", 0)),
+        "toy_length_mm": toy_length_mm,
+        "rail_travel_mm": rail_travel_mm,
+        "max_depth": compute_toy_max_depth(toy_length_mm, rail_travel_mm),
         "local_url": doc.get("local_url", "") or "",
         "public_url": doc.get("public_url", "") or "",
     }
@@ -775,9 +790,15 @@ async def get_settings(user: dict = Depends(get_current_user)):
 
 @api_router.put("/settings")
 async def put_settings(body: SettingsInput, user: dict = Depends(get_current_user)):
-    data = {"min_depth": body.min_depth, "max_speed": body.max_speed, "hr_cutoff": body.hr_cutoff}
+    data = {
+        "min_depth": body.min_depth, "max_speed": body.max_speed, "hr_cutoff": body.hr_cutoff,
+        "toy_length_mm": body.toy_length_mm, "rail_travel_mm": body.rail_travel_mm,
+    }
     await db.settings.update_one({"_id": "global"}, {"$set": data}, upsert=True)
-    hub.limits = {"min_depth": body.min_depth, "max_speed": body.max_speed}
+    hub.limits = {
+        "min_depth": body.min_depth, "max_speed": body.max_speed,
+        "max_depth": compute_toy_max_depth(body.toy_length_mm, body.rail_travel_mm),
+    }
     hub.hr_cutoff = body.hr_cutoff
     await log_event("security", "limits_updated", actor=user["email"], detail=data)
     return await load_settings()
@@ -1070,7 +1091,7 @@ async def startup():
     await db.audit_logs.create_index("category")
     await db.login_attempts.create_index("identifier", unique=True)
     s = await load_settings()
-    hub.limits = {"min_depth": s["min_depth"], "max_speed": s["max_speed"]}
+    hub.limits = {"min_depth": s["min_depth"], "max_speed": s["max_speed"], "max_depth": s["max_depth"]}
     hub.hr_cutoff = s["hr_cutoff"]
     # Optional pre-seed for dev/preview when ADMIN_EMAIL + ADMIN_PASSWORD are set.
     # In self-hosted Docker these are left unset, so the owner creates the admin

@@ -1,39 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as SliderPrimitive from "@radix-ui/react-slider";
-import { Switch } from "@/components/ui/switch";
-import { Gauge, Ruler, Waves, Move3d, Power, Square, Zap, Lock, Ruler as ToyIcon } from "lucide-react";
+import { Gauge, Ruler, Waves, Move3d, Power, Square, Zap, Lock } from "lucide-react";
 import { PATTERNS, cmd } from "@/lib/ossm";
 
 const ICONS = { speed: Gauge, depth: Move3d, stroke: Ruler, sensation: Waves };
-
-// Default full physical travel of a stock OSSM rail, in mm. Depth/stroke
-// percentages (0-100) map onto this distance. Editable in Toy Mode since
-// custom builds vary (200/300/400mm rails are all common).
-const DEFAULT_RAIL_TRAVEL_MM = 300;
-const TOY_MODE_STORAGE_KEY = "kinkology.toyMode";
-
-function loadToyModeSettings() {
-  try {
-    const raw = localStorage.getItem(TOY_MODE_STORAGE_KEY);
-    if (!raw) return { enabled: false, toyLengthMm: 150, railTravelMm: DEFAULT_RAIL_TRAVEL_MM };
-    const parsed = JSON.parse(raw);
-    return {
-      enabled: !!parsed.enabled,
-      toyLengthMm: Number(parsed.toyLengthMm) || 150,
-      railTravelMm: Number(parsed.railTravelMm) || DEFAULT_RAIL_TRAVEL_MM,
-    };
-  } catch {
-    return { enabled: false, toyLengthMm: 150, railTravelMm: DEFAULT_RAIL_TRAVEL_MM };
-  }
-}
-
-function saveToyModeSettings(settings) {
-  try {
-    localStorage.setItem(TOY_MODE_STORAGE_KEY, JSON.stringify(settings));
-  } catch {
-    // ignore storage failures (e.g. private browsing)
-  }
-}
 
 const CONTROL_DESCRIPTIONS = {
   speed: "Increases the speed of the attachment. Speed must be above 0% for the OSSM to move. When paused, increasing speed will resume movement automatically.",
@@ -97,27 +67,24 @@ function ControlSlider({ id, label, value, onChange, disabled, danger, min = 0, 
   );
 }
 
-export function ControlConsole({ onCommand, disabled = false, limits = { min_depth: 0, max_speed: 100 } }) {
+export function ControlConsole({ onCommand, disabled = false, limits = { min_depth: 0, max_speed: 100, max_depth: 100 } }) {
   const minDepth = limits?.min_depth ?? 0;
   const maxSpeed = limits?.max_speed ?? 100;
+  // Toy Mode (admin-only, set in the Safety Limits panel) caps depth at the
+  // percentage of the rail's full travel that the physical toy occupies, so
+  // a stroke can never try to push past where the toy actually ends. This
+  // arrives here as an already-computed limit — guests never see or set the
+  // raw toy length/rail travel, only the resulting cap.
+  const maxDepth = Math.min(100, Math.max(minDepth, limits?.max_depth ?? 100));
 
   const [running, setRunning] = useState(false);
   const [activeProgram, setActiveProgram] = useState(null);
   const [state, setState] = useState({ speed: 0, depth: Math.max(60, minDepth), stroke: 60, sensation: 50 });
   const [pattern, setPattern] = useState(0);
-  const [toyMode, setToyMode] = useState(loadToyModeSettings);
   const throttle = useRef({});
   const progRef = useRef(null);
   const stateRef = useRef(state);
   stateRef.current = state;
-
-  // Toy Mode caps every depth control at the percentage of the rail's full
-  // travel that the physical toy occupies, so a stroke can never try to push
-  // past where the toy actually ends.
-  const toyMaxDepthPercent = toyMode.enabled
-    ? Math.min(100, Math.max(0, Math.round((toyMode.toyLengthMm / toyMode.railTravelMm) * 100)))
-    : 100;
-  const maxDepth = Math.min(100, toyMaxDepthPercent);
 
   const clampSpeed = (v) => Math.min(maxSpeed, Math.max(0, Math.round(v)));
   const clampDepth = (v) => Math.min(maxDepth, Math.max(minDepth, Math.round(v)));
@@ -130,8 +97,8 @@ export function ControlConsole({ onCommand, disabled = false, limits = { min_dep
     // eslint-disable-next-line
   }, [minDepth]);
 
-  // whenever the toy's cap tightens (mode turned on, or length/travel edited
-  // down), pull depth back under it immediately — including mid-run
+  // whenever the toy's cap tightens (admin lowers toy length/rail travel),
+  // pull depth back under it immediately — including mid-run
   useEffect(() => {
     if (state.depth > maxDepth) {
       setState((s) => ({ ...s, depth: maxDepth }));
@@ -139,14 +106,6 @@ export function ControlConsole({ onCommand, disabled = false, limits = { min_dep
     }
     // eslint-disable-next-line
   }, [maxDepth]);
-
-  const updateToyMode = (patch) => {
-    setToyMode((prev) => {
-      const next = { ...prev, ...patch };
-      saveToyModeSettings(next);
-      return next;
-    });
-  };
 
   const sendThrottled = (key, builder, v) => {
     const now = Date.now();
@@ -249,62 +208,11 @@ export function ControlConsole({ onCommand, disabled = false, limits = { min_dep
   const speedNote = maxSpeed < 100 ? `max ${maxSpeed}` : null;
   const depthNoteParts = [];
   if (minDepth > 0) depthNoteParts.push(`min ${minDepth}`);
-  if (toyMode.enabled) depthNoteParts.push(`toy ${toyMode.toyLengthMm}mm → max ${maxDepth}`);
+  if (maxDepth < 100) depthNoteParts.push(`toy max ${maxDepth}`);
   const depthNote = depthNoteParts.length ? depthNoteParts.join(" · ") : null;
 
   return (
     <div className="space-y-8" data-testid="control-console">
-      <div className={disabled ? "opacity-40 pointer-events-none" : ""} data-testid="toy-mode-panel">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <ToyIcon size={16} className="text-[var(--kink-purple)]" />
-            <span className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">TOY MODE</span>
-            <span className="font-mono-data text-[11px] text-[var(--kink-muted)]">
-              caps depth to your toy's insertable length
-            </span>
-          </div>
-          <Switch
-            checked={toyMode.enabled}
-            onCheckedChange={(v) => updateToyMode({ enabled: v })}
-            data-testid="toy-mode-toggle"
-          />
-        </div>
-        {toyMode.enabled && (
-          <div className="flex flex-wrap items-end gap-4 pl-1">
-            <label className="flex flex-col gap-1">
-              <span className="font-mono-data text-[10px] text-[var(--kink-muted)] uppercase tracking-wide">
-                Toy length (mm)
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={toyMode.railTravelMm}
-                value={toyMode.toyLengthMm}
-                onChange={(e) => updateToyMode({ toyLengthMm: Math.max(0, Number(e.target.value) || 0) })}
-                className="bg-transparent border border-[var(--kink-overlay)] px-2 py-1.5 w-24 font-mono-data text-sm focus:outline-none focus:border-[var(--kink-purple)]/40"
-                data-testid="toy-length-input"
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="font-mono-data text-[10px] text-[var(--kink-muted)] uppercase tracking-wide">
-                Rail full travel (mm)
-              </span>
-              <input
-                type="number"
-                min={1}
-                value={toyMode.railTravelMm}
-                onChange={(e) => updateToyMode({ railTravelMm: Math.max(1, Number(e.target.value) || 1) })}
-                className="bg-transparent border border-[var(--kink-overlay)] px-2 py-1.5 w-24 font-mono-data text-sm focus:outline-none focus:border-[var(--kink-purple)]/40"
-                data-testid="toy-rail-travel-input"
-              />
-            </label>
-            <span className="font-mono-data text-xs text-[var(--kink-purple)]" data-testid="toy-mode-max-depth">
-              depth capped at {maxDepth}%
-            </span>
-          </div>
-        )}
-      </div>
-
       <div className="space-y-7">
         <ControlSlider id="speed" label="SPEED" value={state.speed} onChange={setParam("speed", cmd.speed)} disabled={disabled} danger max={maxSpeed} limitNote={speedNote} />
         <ControlSlider id="depth" label="DEPTH" value={state.depth} onChange={setParam("depth", cmd.depth)} disabled={disabled} min={minDepth} max={maxDepth} limitNote={depthNote} />

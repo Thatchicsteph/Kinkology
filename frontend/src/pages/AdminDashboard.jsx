@@ -40,7 +40,7 @@ export default function AdminDashboard() {
   const [label, setLabel] = useState("");
   const [minutes, setMinutes] = useState(10);
   const [showTest, setShowTest] = useState(false);
-  const [limits, setLimits] = useState({ min_depth: 0, max_speed: 100, hr_cutoff: 0 });
+  const [limits, setLimits] = useState({ min_depth: 0, max_speed: 100, hr_cutoff: 0, toy_length_mm: 0, rail_travel_mm: 300, max_depth: 100 });
   const [savingLimits, setSavingLimits] = useState(false);
   const [urls, setUrls] = useState({ local_url: "", public_url: "" });
   const [savingUrls, setSavingUrls] = useState(false);
@@ -55,7 +55,11 @@ export default function AdminDashboard() {
   const loadLimits = async () => {
     try {
       const { data } = await api.get("/settings");
-      setLimits({ min_depth: data.min_depth, max_speed: data.max_speed, hr_cutoff: data.hr_cutoff ?? 0 });
+      setLimits({
+        min_depth: data.min_depth, max_speed: data.max_speed, hr_cutoff: data.hr_cutoff ?? 0,
+        toy_length_mm: data.toy_length_mm ?? 0, rail_travel_mm: data.rail_travel_mm ?? 300,
+        max_depth: data.max_depth ?? 100,
+      });
       setUrls({ local_url: data.local_url || "", public_url: data.public_url || "" });
     } catch (e) {}
   };
@@ -76,8 +80,14 @@ export default function AdminDashboard() {
       const { data } = await api.put("/settings", {
         min_depth: Number(limits.min_depth), max_speed: Number(limits.max_speed),
         hr_cutoff: Number(limits.hr_cutoff) || 0,
+        toy_length_mm: Number(limits.toy_length_mm) || 0,
+        rail_travel_mm: Number(limits.rail_travel_mm) || 300,
       });
-      setLimits({ min_depth: data.min_depth, max_speed: data.max_speed, hr_cutoff: data.hr_cutoff ?? 0 });
+      setLimits({
+        min_depth: data.min_depth, max_speed: data.max_speed, hr_cutoff: data.hr_cutoff ?? 0,
+        toy_length_mm: data.toy_length_mm ?? 0, rail_travel_mm: data.rail_travel_mm ?? 300,
+        max_depth: data.max_depth ?? 100,
+      });
       toast.success("Safety limits saved — enforced for all guests");
     } catch (e) { toast.error("Could not save limits"); }
     finally { setSavingLimits(false); }
@@ -318,6 +328,47 @@ export default function AdminDashboard() {
                   data-testid="limit-max-speed"
                   className="w-full accent-[var(--kink-danger)]"
                 />
+              </div>
+              <div className="pt-1 border-t border-[var(--kink-overlay)]">
+                <div className="flex items-center justify-between mb-2 mt-4">
+                  <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">TOY LENGTH</label>
+                  <span className="font-mono-data text-lg font-bold text-[var(--kink-purple)]" data-testid="limit-toy-max-depth-value">
+                    {limits.toy_length_mm > 0 ? `caps depth at ${limits.max_depth}%` : "OFF"}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-end gap-4">
+                  <label className="flex flex-col gap-1">
+                    <span className="font-mono-data text-[10px] text-[var(--kink-muted)] uppercase tracking-wide">
+                      Toy length (mm)
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={2000}
+                      value={limits.toy_length_mm}
+                      onChange={(e) => setLimits((l) => ({ ...l, toy_length_mm: Math.max(0, Number(e.target.value) || 0) }))}
+                      className="bg-transparent border border-[var(--kink-overlay)] px-2 py-1.5 w-24 font-mono-data text-sm focus:outline-none focus:border-[var(--kink-purple)]/40"
+                      data-testid="limit-toy-length-mm"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="font-mono-data text-[10px] text-[var(--kink-muted)] uppercase tracking-wide">
+                      Rail full travel (mm)
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={2000}
+                      value={limits.rail_travel_mm}
+                      onChange={(e) => setLimits((l) => ({ ...l, rail_travel_mm: Math.max(1, Number(e.target.value) || 1) }))}
+                      className="bg-transparent border border-[var(--kink-overlay)] px-2 py-1.5 w-24 font-mono-data text-sm focus:outline-none focus:border-[var(--kink-purple)]/40"
+                      data-testid="limit-rail-travel-mm"
+                    />
+                  </label>
+                </div>
+                <p className="font-mono-data text-[11px] text-[var(--kink-muted)] mt-1.5">
+                  Every depth control — for you and every guest — is capped at this toy's insertable length. Set toy length to 0 to turn the cap off.
+                </p>
               </div>
               <div className="pt-1 border-t border-[var(--kink-overlay)]">
                 <div className="flex items-center justify-between mb-2 mt-4">
