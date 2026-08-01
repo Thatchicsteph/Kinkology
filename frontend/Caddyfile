@@ -1,5 +1,5 @@
 {
-	email admin@tg30.ddns.net
+	email admin@ChangeMe
 }
 
 # Shared routing: /api/* (incl. WebSockets) -> backend, everything else -> SPA
@@ -16,7 +16,7 @@
 
 # Public HTTPS via Let's Encrypt. Domain comes from the DOMAIN env var
 # (set it in .env). Requires router port-forwards: 80 -> Mac and 443 -> Mac.
-{$DOMAIN:tg30.ddns.net} {
+{$DOMAIN:ChangeMe} {
 	import app
 }
 
