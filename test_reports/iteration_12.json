@@ -1,0 +1,50 @@
+{
+  "summary": "Security hardening iteration verified. Created /app/backend/tests/test_security_hardening.py with 14 pytest cases: setup 403 (no NameError crash), login cookie SameSite=lax, malformed ObjectId returns 404 on revoke/add-minutes/delete, /api/access brute-force lockout (5 fails -> 6th 429, valid code clears counter, valid also blocked while locked), code CRUD regression, settings + URLs regression, 2FA enroll reachable (kept disabled), audit logs return + category filter. All 14 tests pass. Frontend smoke: /admin/login -> /admin dashboard renders, code creation via create-code-form succeeds and appears in codes-list.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_security_hardening.py",
+    "/app/test_reports/pytest/security_hardening.xml"
+  ],
+  "test_results": {
+    "backend": {
+      "TestSetupRegression::test_setup_status_no_setup_needed": "PASS",
+      "TestSetupRegression::test_setup_post_returns_403_not_500": "PASS - POST /api/setup returns 403 cleanly (no NameError 500 crash)",
+      "TestLoginCookie::test_login_sets_access_token_cookie": "PASS - backend Set-Cookie emits SameSite=lax (verified via localhost:8001; note: external Cloudflare ingress rewrites to SameSite=none;Partitioned for cross-site preview, but the app itself is same-origin)",
+      "TestMalformedObjectId::test_revoke_malformed_returns_404": "PASS - NOT_AN_OID/zzz/123/!!! all -> 404",
+      "TestMalformedObjectId::test_add_minutes_malformed_returns_404": "PASS",
+      "TestMalformedObjectId::test_delete_malformed_returns_404": "PASS",
+      "TestAccessLockout::test_1_valid_code_returns_valid": "PASS",
+      "TestAccessLockout::test_2_valid_code_clears_prior_failures": "PASS - 4 invalid then valid clears :access counter (verified in login_attempts collection)",
+      "TestAccessLockout::test_3_five_invalid_then_429_on_sixth": "PASS - Retry-After header present (<=900s); valid code also 429 while locked",
+      "TestCodeCrudRegression::test_full_crud_lifecycle": "PASS",
+      "TestSettingsRegression::test_get_put_settings": "PASS - GET/PUT settings + PUT settings/urls with Bearer",
+      "TestTwoFAEnrollReachable::test_setup_start_returns_provisioning": "PASS - secret + otpauth_uri + qr_code_data_url returned; 2FA left disabled",
+      "TestTwoFAEnrollReachable::test_2fa_status_disabled": "PASS",
+      "TestAuditLogsRegression::test_logs_return_and_category_filter": "PASS - login_success + category filter work"
+    },
+    "frontend": {
+      "admin_login_and_redirect": "PASS - /admin/login -> /admin",
+      "dashboard_render": "PASS - HR Sync, HR status, Safety Limits, Base URLs, Access Code panel visible in screenshot",
+      "create_code_form": "PASS - TEST_UI_CODE created and appears in codes-list with 'Access code created' toast",
+      "hr_status_and_connect_button": "PASS - data-testid=hr-status and hr-connect-button render"
+    }
+  },
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1051 lines. Consider splitting: auth/lockout, codes/access, settings/urls, session WS, HR WS, audit logs, 2FA into modules under /app/backend/app/ for maintainability.",
+    "Cookie SameSite=lax is honored by the backend, but the external preview ingress (Cloudflare __cf_bm) rewrites Set-Cookie to include Partitioned; SameSite=none. This is out-of-scope for backend but note: for TRUE cross-site guest overlays (embedded on other origins) the rewrite is what actually reaches the browser. For same-origin preview it's fine.",
+    "The review request references dashboard testids 'device-host, live-session, recent-activity, base-urls, safety-limits' but the actual DOM uses '-card' suffix (base-urls-card, safety-limits-card, activity-log-card) and 'live-queue' + 'connect-device-button'. Naming is fine but the review request naming is stale; not a bug.",
+    "check_lockout runs BEFORE any code validity check on /api/access, so once locked even a legit guest with a valid code gets 429. Documented intentionally; the docstring in review confirms this. UX note: guests would see a 429 with no path to recovery except waiting 15min or admin clearing login_attempts."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_security_hardening.py"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% (smoke)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026",
+  "seed_data_creation": "None. Test codes cleaned; login_attempts empty; twofa_enabled=false verified post-run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 12 security hardening verified end-to-end. Regression suite: run pytest /app/backend/tests/test_security_hardening.py and /app/backend/tests/backend_test.py + test_audit_logs.py + test_lockout.py + test_twofa.py + test_setup_and_urls.py + test_hr_websocket.py. The access-lockout test empties the :access identifier in login_attempts before/after, so it will not leak state to other files. If access lockout ever traps the caller IP, delete login_attempts docs whose identifier ends with ':access'.",
+  "rca of the issue": "N/A - no failing bugs. External Set-Cookie SameSite rewrite is an ingress/CDN behavior (Cloudflare); backend correctly emits SameSite=lax at localhost."
+}

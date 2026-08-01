@@ -1,0 +1,23 @@
+{
+  "summary": "Iteration 3: Full backend + frontend verification of NEW safety-limits + auto-programs features. Extended /app/backend/tests/backend_test.py with TestSettings class (GET/PUT/validation/reset) and test_ws_clamp_depth_and_speed (WebSocket server-side clamp). Ran full pytest suite: 27/27 PASSED in 9s. Frontend Playwright tests via public URL: (1) Admin login OK, (2) SAFETY LIMITS card renders with limit-min-depth / limit-max-speed / value displays / save-limits-button, (3) save shows 'Safety limits saved' toast and persists across reload (min=50, max=60), (4) Guest console /c/{CODE} renders AUTO PROGRAMS section with all 6 buttons (wave, buildup, tease, pulse, surge, random), (5) 'min 50' and 'max 60' lock notes shown, (6) DEPTH slider clamped >=50 via keyboard ArrowLeft x80 (stays at 50), (7) SPEED slider clamped <=60 (stays at 60), (8) program-wave click sets start-stop button to STOP, shows program-active-note, and speed changes automatically over time (59->60) while remaining clamped, (9) manual slider touch stops program (takeover), (10) STOP button resets speed=0 & button back to START, (11) clicking the active program again toggles it off. Limits reset to {0,100} at end (verified via GET).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py Hub.limits is process-local (single-worker only) — fine for current in-memory Hub design but noted.",
+    "Depth clamp only enforces floor (min); no ceiling. Speed clamp only enforces ceiling. This matches spec.",
+    "Frontend ControlConsole clampDepth uses max=100 hardcoded — consistent with backend which does not clamp depth upward, OK.",
+    "GuestControl.jsx: pre-existing note from iter_1 about ControlConsole remount — verified in this iteration that mounting is stable during phase='active' (component instance retained across state ticks since key doesn't change)."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (27/27)", "frontend": "100% (all UI checks passed)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created TEST_-prefixed access codes during backend tests (auto-cleaned via teardown). Left one guest code MAQFTH from UI test (labeled TEST_UI, 5min) — safe to leave, but can be revoked from admin dashboard.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression suite in /app/backend/tests/backend_test.py now has 27 tests including WS clamp verification. Playwright approach: use [data-testid='login-form'] flow with login-email/login-password/login-submit ids, then look for safety-limits-card. For Radix slider clamp testing, focus the [role='slider'] thumb inside slider-{id} and drive with keyboard ArrowLeft/ArrowRight. Limits are broadcast to guest via WS state — must be set BEFORE guest connects."
+}

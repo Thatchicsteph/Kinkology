@@ -1,0 +1,232 @@
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/context/AuthContext";
+import { formatApiErrorDetail } from "@/lib/api";
+import { Lock, ShieldCheck, KeyRound, UserPlus, Loader2 } from "lucide-react";
+import kinkologyMark from "@/assets/kinkology-mark.png";
+
+export default function AdminLogin() {
+  const { login, verify2fa, checkSetup, setupAdmin } = useAuth();
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // First-run setup step
+  const [needsSetup, setNeedsSetup] = useState(null); // null=checking
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [localUrl, setLocalUrl] = useState("http://localhost");
+  const [publicUrl, setPublicUrl] = useState("");
+
+  // 2FA step
+  const [mfaToken, setMfaToken] = useState(null);
+  const [code, setCode] = useState("");
+  const [useRecovery, setUseRecovery] = useState(false);
+
+  useEffect(() => {
+    checkSetup()
+      .then((v) => setNeedsSetup(v))
+      .catch(() => setNeedsSetup(false));
+  }, []); // eslint-disable-line
+
+  const submitSetup = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await setupAdmin(email, password, localUrl.trim(), publicUrl.trim());
+      navigate("/admin");
+    } catch (err) {
+      setError(formatApiErrorDetail(err.response?.data?.detail) || err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const res = await login(email, password);
+      if (res.mfaRequired) {
+        setMfaToken(res.mfaToken);
+      } else {
+        navigate("/admin");
+      }
+    } catch (err) {
+      setError(formatApiErrorDetail(err.response?.data?.detail) || err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submit2fa = async (e) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      await verify2fa({
+        mfaToken,
+        code: useRecovery ? null : code,
+        recoveryCode: useRecovery ? code : null,
+      });
+      navigate("/admin");
+    } catch (err) {
+      setError(formatApiErrorDetail(err.response?.data?.detail) || err.message);
+      if (err.response?.status === 401 && String(err.response?.data?.detail || "").includes("expired")) {
+        setMfaToken(null);
+        setCode("");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="relative z-10 min-h-screen flex items-center justify-center px-6">
+      {needsSetup === null ? (
+        <div className="flex items-center gap-3 text-[var(--kink-text-2)]" data-testid="setup-checking">
+          <Loader2 className="animate-spin text-[var(--kink-purple)]" size={22} />
+          <span className="font-mono-data text-sm tracking-wide">Loading…</span>
+        </div>
+      ) : needsSetup ? (
+        <form onSubmit={submitSetup} className="hud-panel w-full max-w-md p-8 fade-up" data-testid="setup-form">
+          <div className="flex items-center gap-2.5 mb-1">
+            <img src={kinkologyMark} alt="Kinkology" style={{ height: 22, width: 22 }} className="rounded-sm" />
+            <span className="font-display font-black tracking-[0.2em] text-lg">KINKOLOGY</span>
+          </div>
+          <h1 className="font-display font-black uppercase tracking-[0.05em] text-2xl mt-6 flex items-center gap-2">
+            <UserPlus size={20} className="text-[var(--kink-purple)]" /> Create Owner Account
+          </h1>
+          <p className="text-[var(--kink-text-2)] text-sm mt-2">First launch — set up the owner account for this device.</p>
+
+          {error && (
+            <div className="mt-5 border border-[var(--kink-danger)]/40 bg-[var(--kink-danger)]/10 text-[var(--kink-danger)] text-sm px-4 py-3" data-testid="setup-error">
+              {error}
+            </div>
+          )}
+
+          <div className="mt-6 space-y-4">
+            <div>
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">EMAIL</label>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} data-testid="setup-email" required
+                className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-4 py-3 outline-none focus:border-[var(--kink-purple)] transition-colors" />
+            </div>
+            <div>
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">PASSWORD</label>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} data-testid="setup-password" required minLength={8}
+                className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-4 py-3 outline-none focus:border-[var(--kink-purple)] transition-colors" />
+              <p className="text-[var(--kink-muted)] text-xs mt-1.5">At least 8 characters.</p>
+            </div>
+            <div>
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">CONFIRM PASSWORD</label>
+              <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} data-testid="setup-confirm-password" required
+                className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-4 py-3 outline-none focus:border-[var(--kink-purple)] transition-colors" />
+            </div>
+            <div className="pt-2 border-t border-[var(--kink-overlay)]">
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">LOCAL URL</label>
+              <input type="text" value={localUrl} onChange={(e) => setLocalUrl(e.target.value)} data-testid="setup-local-url" placeholder="http://localhost"
+                className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-4 py-3 font-mono-data text-sm outline-none focus:border-[var(--kink-purple)] transition-colors" />
+              <p className="text-[var(--kink-muted)] text-xs mt-1.5">Where you open the app on this machine (owner + OBS overlay).</p>
+            </div>
+            <div>
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">GLOBAL / PUBLIC URL</label>
+              <input type="text" value={publicUrl} onChange={(e) => setPublicUrl(e.target.value)} data-testid="setup-public-url" placeholder="https://your-domain.com"
+                className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-4 py-3 font-mono-data text-sm outline-none focus:border-[var(--kink-purple)] transition-colors" />
+              <p className="text-[var(--kink-muted)] text-xs mt-1.5">Public HTTPS address remote guests use — guest links are built from this.</p>
+            </div>
+          </div>
+
+          <button type="submit" disabled={loading} data-testid="setup-submit"
+            className="w-full mt-7 bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.15em] py-3.5 active:scale-95 transition-transform disabled:opacity-50">
+            {loading ? "CREATING…" : "CREATE ACCOUNT"}
+          </button>
+        </form>
+      ) : !mfaToken ? (
+        <form onSubmit={submit} className="hud-panel w-full max-w-md p-8 fade-up" data-testid="login-form">
+          <div className="flex items-center gap-2.5 mb-1">
+            <img src={kinkologyMark} alt="Kinkology" style={{ height: 22, width: 22 }} className="rounded-sm" />
+            <span className="font-display font-black tracking-[0.2em] text-lg">KINKOLOGY</span>
+          </div>
+          <h1 className="font-display font-black uppercase tracking-[0.05em] text-2xl mt-6 flex items-center gap-2">
+            <Lock size={20} className="text-[var(--kink-purple)]" /> Owner Access
+          </h1>
+          <p className="text-[var(--kink-text-2)] text-sm mt-2">Sign in to manage your device and access codes.</p>
+
+          {error && (
+            <div className="mt-5 border border-[var(--kink-danger)]/40 bg-[var(--kink-danger)]/10 text-[var(--kink-danger)] text-sm px-4 py-3" data-testid="login-error">
+              {error}
+            </div>
+          )}
+
+          <div className="mt-6 space-y-4">
+            <div>
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">EMAIL</label>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} data-testid="login-email" required
+                className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-4 py-3 outline-none focus:border-[var(--kink-purple)] transition-colors" />
+            </div>
+            <div>
+              <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">PASSWORD</label>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} data-testid="login-password" required
+                className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-4 py-3 outline-none focus:border-[var(--kink-purple)] transition-colors" />
+            </div>
+          </div>
+
+          <button type="submit" disabled={loading} data-testid="login-submit"
+            className="w-full mt-7 bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.15em] py-3.5 active:scale-95 transition-transform disabled:opacity-50">
+            {loading ? "AUTHENTICATING…" : "SIGN IN"}
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={submit2fa} className="hud-panel w-full max-w-md p-8 fade-up" data-testid="twofa-form">
+          <div className="flex items-center gap-2.5 mb-1">
+            <img src={kinkologyMark} alt="Kinkology" style={{ height: 22, width: 22 }} className="rounded-sm" />
+            <span className="font-display font-black tracking-[0.2em] text-lg">KINKOLOGY</span>
+          </div>
+          <h1 className="font-display font-black uppercase tracking-[0.05em] text-2xl mt-6 flex items-center gap-2">
+            <ShieldCheck size={20} className="text-[var(--kink-purple)]" /> Two-Factor
+          </h1>
+          <p className="text-[var(--kink-text-2)] text-sm mt-2">
+            {useRecovery ? "Enter one of your backup recovery codes." : "Enter the 6-digit code from your authenticator app."}
+          </p>
+
+          {error && (
+            <div className="mt-5 border border-[var(--kink-danger)]/40 bg-[var(--kink-danger)]/10 text-[var(--kink-danger)] text-sm px-4 py-3" data-testid="twofa-error">
+              {error}
+            </div>
+          )}
+
+          <input
+            value={code}
+            onChange={(e) => setCode(useRecovery ? e.target.value.toUpperCase() : e.target.value.replace(/\D/g, "").slice(0, 6))}
+            data-testid="twofa-code"
+            autoFocus
+            placeholder={useRecovery ? "XXXX-XXXX-XXXX" : "123456"}
+            className="w-full mt-6 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-4 py-3.5 font-mono-data text-2xl tracking-[0.3em] text-center outline-none focus:border-[var(--kink-purple)] transition-colors placeholder:text-[var(--kink-muted)] placeholder:text-lg"
+          />
+
+          <button type="submit" disabled={loading || !code} data-testid="twofa-submit"
+            className="w-full mt-6 bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.15em] py-3.5 active:scale-95 transition-transform disabled:opacity-50">
+            {loading ? "VERIFYING…" : "VERIFY"}
+          </button>
+
+          <button type="button" onClick={() => { setUseRecovery((v) => !v); setCode(""); setError(""); }}
+            data-testid="twofa-toggle-recovery"
+            className="w-full mt-4 flex items-center justify-center gap-2 font-mono-data text-xs text-[var(--kink-text-2)] hover:text-[var(--kink-purple)] transition-colors">
+            <KeyRound size={13} /> {useRecovery ? "Use authenticator code instead" : "Use a backup recovery code"}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,31 @@
+{
+  "summary": "Focused verification of the guest access-code + WebSocket-activation flow END-TO-END through the EXTERNAL HTTPS/WSS ingress (mirrors the user's Caddy scenario). Wrote /app/backend/tests/test_guest_activation_external.py covering: GET /api/access/{CODE} for valid/unknown/revoked codes via https, wss://.../api/ws/control/{VALID} => guest receives {type:'state', you.status:'active'} in <2s and follow-up state after a valid command, wss with invalid code => {type:'rejected'} + close, wss with revoked code => rejected. All 4 new tests pass. Full backend suite: 51/51 pass (existing 47 + new 4). Frontend Playwright: /c/{VALID} lands on data-testid='control-console' with sliders + start-stop-button + 09:57 timer + host-offline warning (no stuck 'Connecting to the bridge…' spinner); /c/GARBAGEX shows data-testid='invalid-state' with 'CODE NOT VALID'. CONCLUSION: OSSM Bridge guest activation is correct end-to-end; the user's failure is an infra/proxy issue (Caddy not upgrading /api/ws/* to WebSocket) — NOT app code.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_guest_activation_external.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_overlay.py",
+    "/app/backend/tests/test_twofa.py",
+    "/app/backend/tests/test_lockout.py",
+    "/app/test_reports/pytest/iteration_8_results.xml"
+  ],
+  "action_items": [
+    "No app-side action. Advise the user that their symptom (valid code shows 'Connecting…' forever, invalid code shows 'not valid') is the classic signature of a reverse proxy that DOES route HTTPS but does NOT upgrade WebSocket. In Caddy the fix is to allow the WS upgrade for /api/ws/* — a simple `reverse_proxy` directive with no filtering is enough (Caddy v2 upgrades WS automatically). If they added a matcher like `@api path /api/*` and used `handle` blocks, ensure the same block covers /api/ws/* and no `header_up Connection`/`header_up Upgrade` overrides are stripping the upgrade headers. Recommend they test with: `websocat wss://their-host/api/ws/control/BADCODE` — should immediately receive a {\"type\":\"rejected\"} frame. If the connection hangs or 502s, it's their proxy."
+  ],
+  "critical_code_review_comments": [
+    "server.py ws_control (lines 662-690) correctly validates code first, only then accept()s for valid codes; for invalid codes it accept()+send rejected+close — behavior verified live.",
+    "Hub.add_client -> promote is called inside hub.lock and immediately followed by hub.broadcast() so the guest receives the active state within one broadcast — activation latency observed < ~500ms in tests.",
+    "handle_command telemetry updates and clamp are wrapped inside try/except paths that don't propagate; no regression from telemetry additions — verified by 'command after active' step in test_external_wss_guest_becomes_active."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_guest_activation_external.py (new)"
+  ],
+  "success_rate": {"backend": "100% (51/51)", "frontend": "100% (2/2 pages)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None persisted. All TEST_-labelled codes created during testing were deleted; verified with a cleanup pass. 2FA stays off; limits stay {0,100}.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 8 adds test_guest_activation_external.py which exercises the guest activation flow OVER THE EXTERNAL wss ingress (not just localhost). This is the definitive regression for the user's 'valid code doesn't activate' report. Keep it in the suite. WS_BASE for these tests is derived from frontend/.env (wss://). If the external ingress ever stops upgrading WS, these 4 tests will fail — telling you the proxy layer regressed, not the app.",
+  "rca of the issue": "USER-REPORTED BUG (external, not reproducible here): 'valid code shows Connecting…, invalid code shows Code not valid'. Reproduction attempt in known-good env: fully passes — valid code becomes active over wss in ~500ms, invalid code is rejected. Root cause is therefore in the user's Caddy reverse proxy: it proxies HTTPS (so GET /api/access/{code} works and rejects invalid codes correctly) but does NOT upgrade the WebSocket handshake for /api/ws/control/{code}. Result: their frontend's ws.onopen never fires, phase stays 'connecting', and eventually ws.onclose flips it to 'ended' — matching the reported UX exactly. Mitigation: user should ensure their Caddyfile has a plain `reverse_proxy backend:8001` for /api/* (Caddy v2 upgrades WS automatically) and no custom Connection/Upgrade header overrides. Quick user-side proof: run `curl -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdA==' https://<their-host>/api/ws/control/BADCODE` — should return HTTP/1.1 101 Switching Protocols. If it returns 200/502/hangs, their proxy is the culprit."
+}

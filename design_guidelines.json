@@ -1,0 +1,93 @@
+{
+  "theme": "dark",
+  "archetype": "THE PERFORMANCE PRO + RETRO-FUTURISM",
+  "emotional_tone": "Premium, trustworthy, high-performance hardware, intimate but precise.",
+  "typography": {
+    "headings": {
+      "font": "Chivo",
+      "style": "uppercase, tracking-[0.05em] to tracking-[0.1em], font-black"
+    },
+    "data_and_timers": {
+      "font": "JetBrains Mono",
+      "style": "tracking-tight, used for countdowns, live queue numbers, device metrics"
+    },
+    "body_and_labels": {
+      "font": "IBM Plex Sans",
+      "style": "clean, technical, readable"
+    }
+  },
+  "colors": {
+    "background": {
+      "base": "#0A0A0B",
+      "raised": "#161618",
+      "overlay": "#222225"
+    },
+    "primary": "#00E5FF",
+    "danger": "#FF2A5F",
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A0A0A5",
+      "muted": "#5C5C60"
+    }
+  },
+  "visual_enhancers": {
+    "surfaces": "Use 'Grid Borders' (The Technical Look) for the dashboard. Use 1px #222225 borders on #161618 panels. Avoid heavy drop shadows; use 1px top inner borders to simulate hardware bezel.",
+    "textures": "Subtle noise overlay (grain) on the background to make it feel like physical matte plastic/metal.",
+    "glow": "Neon glow effects strictly reserved for active states (e.g. drop-shadow-[0_0_8px_rgba(0,229,255,0.5)] on active sliders or drop-shadow-[0_0_12px_rgba(255,42,95,0.8)] on the Stop button)."
+  },
+  "grids_layouts": {
+    "admin_dashboard": "Mode B (High Density Grid) for device connections, link generation, and active user stats. Use col-span-3 for main activity, col-span-1 for link generation panel.",
+    "guest_console": "Mobile-first, single-column control stack. Massive Start/Stop button at bottom (sticky), sliders stacked in the center, large prominent countdown timer at the top."
+  },
+  "components": {
+    "sliders": {
+      "instructions": "Use Shadcn slider but override track to be #222225 and active range to be Electric Cyan (#00E5FF). The thumb should be a larger, easily grabbable hardware-like pill or circle.",
+      "path": "src/components/ui/slider.jsx"
+    },
+    "big_action_button": {
+      "instructions": "For Start/Stop. Must be massive (h-20 or larger), full width. Red/Crimson when active to signify STOP. Include pulse animation on active.",
+      "path": "src/components/ui/button.jsx"
+    },
+    "live_queue": {
+      "instructions": "A vertical list of users. Active user highlighted with primary color and glowing dot. Waitlist users muted.",
+      "path": "Custom HTML/Tailwind"
+    },
+    "timer_display": {
+      "instructions": "Massive JetBrains Mono text (text-5xl or text-6xl), centered, glowing cyan if > 1 min, pulsing red if < 1 min.",
+      "path": "Custom HTML/Tailwind"
+    }
+  },
+  "motion": {
+    "sliders": "Smooth transition on value change.",
+    "timer": "Every second tick should feel precise.",
+    "buttons": "Tactile click effect (scale-95 active state)."
+  },
+  "accessibility": {
+    "contrast": "Ensure text contrast against #161618 is at least 4.5:1. Primary Cyan (#00E5FF) and Red (#FF2A5F) must be tested against dark backgrounds.",
+    "controls": "Sliders and huge buttons must be operable via keyboard.",
+    "data_testid": "Required on all sliders, Start/Stop button, queue items, and connect device buttons."
+  },
+  "media": {
+    "image_urls": {
+      "hardware_texture": "https://images.unsplash.com/photo-1695676504447-856ad4ec0fb8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHwzfHxkYXJrJTIwcHJlbWl1bSUyMGhhcmR3YXJlJTIwY29uc29sZSUyMHRleHR1cmV8ZW58MHx8fHwxNzg1MzEzNzQyfDA&ixlib=rb-4.1.0&q=85",
+      "abstract_neon": "https://images.unsplash.com/photo-1633218388467-539651dcf81f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwzfHxuZW9uJTIwZ2xvd2luZyUyMGxpbmVzJTIwYWJzdHJhY3QlMjBkYXJrfGVufDB8fHx8MTc4NTMxMzc0M3ww&ixlib=rb-4.1.0&q=85"
+    },
+    "instructions": "Use abstract neon as a very subtle, low opacity (10-15%) blur behind the main console to give depth. Use hardware texture blended with base color for panel backgrounds."
+  },
+  "instructions_to_main_agent": [
+    "Build the dashboard and guest console as distinct views.",
+    "Implement Web Bluetooth logic in a dedicated service/hook (mocked where actual hardware isn't available, but preserve real API usage structure).",
+    "For the Guest Console, emphasize a physical hardware feel. It should look like an expensive remote control.",
+    "Do NOT use transparent backgrounds for cards/panels. Use solid #161618.",
+    "Avoid typical generic SaaS aesthetics. The app must feel like an intimate hardware bridge.",
+    "Include data-testid on all interactive elements."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Do not converge toward generic outputs.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) only for floating elements.",
+    "Do not apply universal transition (`transition: all`).",
+    "Do not center align the app container text by default.",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Use Sonner for toasts."
+  ]
+}
