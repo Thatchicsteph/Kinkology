@@ -144,16 +144,24 @@ async def whip_publish(request: Request) -> Response:
     request MUST carry `Authorization: Bearer <token>` (or `?token=` as a
     fallback). Otherwise ingest is open — same behaviour as before this feature.
     """
+    ip = request.client.host if request.client else "unknown"
+    ct = request.headers.get("Content-Type", "?")
+    has_auth = "yes" if request.headers.get("Authorization") else "no"
+    logger.info("WHIP publish attempt from %s (Content-Type=%s, Authorization=%s)", ip, ct, has_auth)
+
     expected = await _current_publish_token()
     if expected:
         provided = _extract_bearer(request)
         if not provided or not secrets.compare_digest(provided, expected):
+            logger.warning("WHIP publish from %s rejected: %s bearer token",
+                           ip, "missing" if not provided else "wrong")
             raise HTTPException(
                 status_code=401,
                 detail="Missing or invalid publish token. Set the WHIP bearer token in OBS.",
                 headers={"WWW-Authenticate": 'Bearer realm="whip"'},
             )
     sdp = await _read_sdp(request)
+    logger.info("WHIP SDP offer from %s: %d bytes", ip, len(sdp))
     async with hub.lock:
         # Only one publisher slot — close the previous one on takeover.
         if hub.publisher_pc is not None:
@@ -192,15 +200,41 @@ async def whip_publish(request: Request) -> Response:
         await pc.setLocalDescription(answer)
         hub.publisher_started_at = time.time()
 
+    # WHIP spec allows a relative Location, but some clients (incl. some OBS
+    # builds) fail silently on relative resource URLs. Return an absolute URL
+    # built from the incoming request so it works behind Caddy, ngrok, etc.
+    base = str(request.base_url).rstrip("/")
+    location = f"{base}/api/whip/{sid}"
+    logger.info("WHIP publisher %s ready — Location=%s", sid, location)
+
     return Response(
         content=pc.localDescription.sdp,
         status_code=201,
         media_type="application/sdp",
         headers={
-            "Location": f"/api/whip/{sid}",
+            "Location": location,
             "Access-Control-Expose-Headers": "Location, Link",
         },
     )
+
+
+@router.get("/whip")
+@router.head("/whip")
+async def whip_probe() -> Response:
+    """Reachability probe. WHIP clients that do a HEAD/GET first get a hint."""
+    return Response(
+        status_code=200,
+        media_type="text/plain",
+        content="WHIP ingest endpoint. POST an SDP offer with Content-Type: application/sdp.\n",
+    )
+
+
+@router.patch("/whip/{sid}")
+async def whip_trickle(sid: str) -> Response:
+    """Trickle-ICE PATCH from WHIP clients. aiortc gathers ICE non-trickle, so
+    all candidates are already in the answer — we accept and no-op so newer
+    clients (OBS 30.2+) don't error out when they try to trickle."""
+    return Response(status_code=204)
 
 
 @router.delete("/whip/{sid}")
@@ -245,15 +279,21 @@ async def whep_view(request: Request) -> Response:
         await hub.close_viewer(sid)
         raise HTTPException(status_code=400, detail=f"Invalid SDP offer: {e}") from e
 
+    base = str(request.base_url).rstrip("/")
     return Response(
         content=pc.localDescription.sdp,
         status_code=201,
         media_type="application/sdp",
         headers={
-            "Location": f"/api/whep/{sid}",
+            "Location": f"{base}/api/whep/{sid}",
             "Access-Control-Expose-Headers": "Location, Link",
         },
     )
+
+
+@router.patch("/whep/{sid}")
+async def whep_trickle(sid: str) -> Response:
+    return Response(status_code=204)
 
 
 @router.delete("/whep/{sid}")
