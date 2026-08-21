@@ -192,11 +192,16 @@ async def whip_publish(request: Request) -> Response:
         try:
             await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
             answer = await pc.createAnswer()
-        except (ValueError, TypeError) as e:
+        except Exception as e:  # noqa: BLE001
+            logger.exception("WHIP %s failed to negotiate SDP from OBS: %s", sid, e)
+            logger.info("WHIP %s offending SDP (%d bytes):\n%s", sid, len(sdp), sdp)
             await pc.close()
             hub.publisher_pc = None
             hub.publisher_id = None
-            raise HTTPException(status_code=400, detail=f"Invalid SDP offer: {e}") from e
+            raise HTTPException(
+                status_code=400,
+                detail=f"aiortc rejected the SDP offer: {type(e).__name__}: {e}",
+            ) from e
         await pc.setLocalDescription(answer)
         hub.publisher_started_at = time.time()
 
