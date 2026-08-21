@@ -15,10 +15,32 @@ services:
       DB_NAME: kinkology
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (copy env.docker.example to .env)}
+      # WebRTC (OBS -> browser) needs a reachable UDP port range from the host.
+      # Publish the same range in `ports:` below and advertise a host-reachable
+      # IP so ICE actually connects instead of hanging in "connecting".
+      STREAM_UDP_MIN: ${STREAM_UDP_MIN:-50000}
+      STREAM_UDP_MAX: ${STREAM_UDP_MAX:-50019}
+      # 127.0.0.1 works when OBS runs on the same Mac as Docker. For LAN OBS,
+      # set this to the Mac's LAN IP (e.g., 192.168.1.42) in .env. For remote
+      # OBS behind a public domain, set it to the public IP / DDNS host.
+      STREAM_PUBLIC_IP: ${STREAM_PUBLIC_IP:-127.0.0.1}
+      # For same-Mac OBS, its host candidates are 127.0.0.1 which the container
+      # can't reach on the loopback interface. Rewrite them to something the
+      # container CAN reach; on Docker Desktop that's `host.docker.internal`.
+      STREAM_PEER_IP: ${STREAM_PEER_IP:-host.docker.internal}
+    ports:
+      # Publish the WebRTC UDP port range to the host so OBS can send RTP in.
+      # If you change STREAM_UDP_MIN/MAX in .env, change these too.
+      - "${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50019}:${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50019}/udp"
     depends_on:
       - mongo
     networks:
       - kinkology
+    # Docker Desktop for Mac needs this to resolve host.docker.internal from
+    # inside the container (already implicit on Docker Desktop, explicit on
+    # native Linux where it maps to the host gateway).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   web:
     build:

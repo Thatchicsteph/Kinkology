@@ -28,6 +28,8 @@ from aiortc.contrib.media import MediaRelay
 from aiortc.rtcrtpsender import RTCRtpSender
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from stream_patch import rewrite_incoming_sdp
+
 logger = logging.getLogger("ossm-bridge.stream")
 
 # One MediaRelay is shared so a single publisher track can be subscribed to
@@ -161,6 +163,7 @@ async def whip_publish(request: Request) -> Response:
                 headers={"WWW-Authenticate": 'Bearer realm="whip"'},
             )
     sdp = await _read_sdp(request)
+    sdp = rewrite_incoming_sdp(sdp)
     logger.info("WHIP SDP offer from %s: %d bytes", ip, len(sdp))
     async with hub.lock:
         # Only one publisher slot — close the previous one on takeover.
@@ -256,6 +259,7 @@ async def whep_view(request: Request) -> Response:
     if not hub.has_publisher():
         raise HTTPException(status_code=409, detail="No live stream is being published right now.")
     sdp = await _read_sdp(request)
+    sdp = rewrite_incoming_sdp(sdp)
 
     pc = RTCPeerConnection()
     sid = secrets.token_hex(8)
