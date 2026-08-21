@@ -157,6 +157,11 @@ def apply() -> None:
     global _applied
     if _applied:
         return
+    # H.264 codec widening is ALWAYS applied — it doesn't depend on the docker
+    # NAT env vars and fixes the "Failed to set remote video description send
+    # parameters" error we see with OBS Apple VT / high-profile publishers.
+    widen_h264_codecs()
+
     if UDP_MIN <= 0 and UDP_MAX <= 0 and not PUBLIC_IP:
         logger.info("stream_patch: no STREAM_UDP_MIN/MAX/STREAM_PUBLIC_IP set — leaving aioice untouched")
         _applied = True
@@ -189,3 +194,69 @@ def rewrite_incoming_sdp(sdp: str) -> str:
             line = line.replace(" 127.0.0.1 ", f" {peer_ip} ", 1)
         out_lines.append(line)
     return "\n".join(out_lines) + ("\n" if sdp.endswith("\n") else "")
+
+
+def widen_h264_codecs() -> None:
+    """
+    aiortc only advertises H.264 Constrained Baseline profiles (`42001f`,
+    `42e01f`). Real-world publishers (OBS's Apple VideoToolbox on macOS, the
+    NVENC encoder, most browsers) frequently emit Main (`4d*`) or High
+    (`640c*` / `64*`) profile SDPs, and negotiation then fails with:
+
+        OperationError: Failed to set remote video description send parameters
+
+    Since aiortc's H.264 decode path is ffmpeg, it can decode any profile
+    fine — we just need to advertise the extra profile-level-ids so
+    `find_common_codecs` succeeds. This adds Main and High baseline-3.1
+    variants (both with matching RTX entries) to `aiortc.codecs.CODECS`.
+    """
+    try:
+        from aiortc import codecs as _codecs
+        from aiortc.rtcrtpparameters import RTCRtpCodecParameters
+    except Exception:  # noqa: BLE001
+        return
+
+    video = _codecs.CODECS.get("video")
+    if not video:
+        return
+
+    # Extra profile-level-ids to accept from remote peers.
+    #   4d001f — Main       @ Level 3.1  (OBS x264 "main" profile, some NVENC)
+    #   640c1f — Constrained High @ Level 3.1  (OBS Apple VT default on macOS)
+    #   64001f — High       @ Level 3.1
+    extra_profiles = ["4d001f", "640c1f", "64001f"]
+
+    existing_ids = {
+        str(c.parameters.get("profile-level-id", "")).lower()
+        for c in video
+        if c.mimeType.lower() == "video/h264"
+    }
+
+    next_pt = max((c.payloadType for c in video), default=100) + 1
+    added = []
+    for prof in extra_profiles:
+        if prof.lower() in existing_ids:
+            continue
+        h264 = RTCRtpCodecParameters(
+            mimeType="video/H264",
+            clockRate=90000,
+            payloadType=next_pt,
+            parameters={
+                "level-asymmetry-allowed": "1",
+                "packetization-mode": "1",
+                "profile-level-id": prof,
+            },
+        )
+        video.append(h264)
+        rtx = RTCRtpCodecParameters(
+            mimeType="video/rtx",
+            clockRate=90000,
+            payloadType=next_pt + 1,
+            parameters={"apt": next_pt},
+        )
+        video.append(rtx)
+        added.append(prof)
+        next_pt += 2
+
+    if added:
+        logger.info("stream_patch: added H.264 profile-level-ids to aiortc CODECS: %s", added)
