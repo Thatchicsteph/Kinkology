@@ -21,7 +21,7 @@ import asyncio
 import logging
 import secrets
 import time
-from typing import Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaRelay
@@ -33,6 +33,32 @@ logger = logging.getLogger("ossm-bridge.stream")
 # One MediaRelay is shared so a single publisher track can be subscribed to
 # by any number of viewer peer connections without decode duplication.
 _relay = MediaRelay()
+
+# Server.py wires this on startup so we can check the persisted publish token
+# without importing the mongo client (avoids a circular import).
+_get_publish_token: Optional[Callable[[], Awaitable[str]]] = None
+
+
+def set_publish_token_provider(provider: Callable[[], Awaitable[str]]) -> None:
+    global _get_publish_token
+    _get_publish_token = provider
+
+
+async def _current_publish_token() -> str:
+    if _get_publish_token is None:
+        return ""
+    try:
+        return (await _get_publish_token()) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _extract_bearer(request: Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    # Some WHIP clients pass ?token= or ?auth= on the URL. Support both as a fallback.
+    return (request.query_params.get("token") or request.query_params.get("auth") or "").strip()
 
 
 class StreamHub:
@@ -112,7 +138,21 @@ async def _read_sdp(request: Request) -> str:
 
 @router.post("/whip", status_code=201)
 async def whip_publish(request: Request) -> Response:
-    """WHIP ingest — one publisher at a time. Replaces the current publisher."""
+    """WHIP ingest — one publisher at a time. Replaces the current publisher.
+
+    If an owner-set publish token is configured (`settings.stream_token`), the
+    request MUST carry `Authorization: Bearer <token>` (or `?token=` as a
+    fallback). Otherwise ingest is open — same behaviour as before this feature.
+    """
+    expected = await _current_publish_token()
+    if expected:
+        provided = _extract_bearer(request)
+        if not provided or not secrets.compare_digest(provided, expected):
+            raise HTTPException(
+                status_code=401,
+                detail="Missing or invalid publish token. Set the WHIP bearer token in OBS.",
+                headers={"WWW-Authenticate": 'Bearer realm="whip"'},
+            )
     sdp = await _read_sdp(request)
     async with hub.lock:
         # Only one publisher slot — close the previous one on takeover.
@@ -231,7 +271,9 @@ async def stream_options() -> Response:
 
 @router.get("/stream/status")
 async def stream_status() -> dict:
-    return hub.status()
+    st = hub.status()
+    st["publish_token_required"] = bool(await _current_publish_token())
+    return st
 
 
 async def shutdown() -> None:

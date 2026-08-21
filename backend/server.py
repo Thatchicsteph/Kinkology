@@ -26,7 +26,7 @@ import csv
 import json
 from io import BytesIO, StringIO
 
-from stream import router as stream_router, shutdown as stream_shutdown
+from stream import router as stream_router, shutdown as stream_shutdown, set_publish_token_provider
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -1086,6 +1086,46 @@ async def export_logs(
 @api_router.get("/")
 async def root():
     return {"message": "Kinkology API"}
+
+# ------------------------------------------------------------------
+# OBS/WHIP publish token — optional bearer secret that OBS must send
+# in `Authorization: Bearer <token>` before it's allowed to publish.
+# ------------------------------------------------------------------
+async def _get_stream_publish_token() -> str:
+    doc = await db.settings.find_one({"_id": "global"}) or {}
+    return (doc.get("stream_token") or "").strip()
+
+set_publish_token_provider(_get_stream_publish_token)
+
+
+class StreamTokenInput(BaseModel):
+    token: Optional[str] = None  # None => server generates one
+
+
+@api_router.get("/stream/token")
+async def get_stream_token(user: dict = Depends(get_current_user)):
+    token = await _get_stream_publish_token()
+    return {"token": token, "enabled": bool(token)}
+
+
+@api_router.post("/stream/token")
+async def set_stream_token(body: StreamTokenInput, user: dict = Depends(get_current_user)):
+    token = (body.token or "").strip() if body.token is not None else secrets.token_urlsafe(24)
+    if not token:
+        raise HTTPException(status_code=400, detail="Token cannot be empty. Use DELETE to disable auth.")
+    if len(token) < 8:
+        raise HTTPException(status_code=400, detail="Token must be at least 8 characters.")
+    await db.settings.update_one({"_id": "global"}, {"$set": {"stream_token": token}}, upsert=True)
+    await log_event("security", "stream_token_set", actor=user["email"])
+    return {"token": token, "enabled": True}
+
+
+@api_router.delete("/stream/token")
+async def clear_stream_token(user: dict = Depends(get_current_user)):
+    await db.settings.update_one({"_id": "global"}, {"$unset": {"stream_token": ""}}, upsert=True)
+    await log_event("security", "stream_token_cleared", actor=user["email"])
+    return {"token": "", "enabled": False}
+
 
 api_router.include_router(stream_router)
 app.include_router(api_router)

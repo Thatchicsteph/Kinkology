@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { API } from "@/lib/api";
-import { Video, VideoOff, Volume2, VolumeX, Maximize2, Loader2 } from "lucide-react";
+import { api, API } from "@/lib/api";
+import { Video, VideoOff, Volume2, VolumeX, Maximize2, Loader2, Copy, RefreshCw, ShieldCheck, ShieldOff, Eye, EyeOff } from "lucide-react";
+import { toast } from "sonner";
 
 /**
  * WHEP-based OBS stream viewer.
@@ -226,27 +227,68 @@ export function ObsStream({ compact = false }) {
 }
 
 /**
- * Owner-facing helper card: shows the WHIP endpoint to paste into OBS and
- * lets the owner copy it in one tap.
+ * Owner-facing helper card: shows the WHIP endpoint to paste into OBS, an
+ * optional bearer publish token (view/generate/rotate/clear), and copy shortcuts.
  */
 export function ObsStreamSetup({ localUrl }) {
   const base = (localUrl || (typeof window !== "undefined" ? window.location.origin : "")).replace(/\/+$/, "");
   const whipUrl = `${base}/api/whip`;
-  const copy = async () => {
+
+  const [token, setToken] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [reveal, setReveal] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
     try {
-      await navigator.clipboard.writeText(whipUrl);
-      if (window?.dispatchEvent) window.dispatchEvent(new CustomEvent("kinkology-toast", { detail: "WHIP URL copied" }));
-    } catch (_) { /* clipboard may be blocked in insecure contexts */ }
+      const { data } = await api.get("/stream/token");
+      setToken(data.token || "");
+      setEnabled(!!data.enabled);
+    } catch (_) { /* not logged in yet */ }
   };
+  useEffect(() => { load(); }, []);
+
+  const generate = async () => {
+    setBusy(true);
+    try {
+      const { data } = await api.post("/stream/token", {});
+      setToken(data.token);
+      setEnabled(true);
+      setReveal(true);
+      toast.success("New WHIP publish token generated");
+    } catch (e) {
+      toast.error("Could not generate token");
+    } finally { setBusy(false); }
+  };
+  const disable = async () => {
+    setBusy(true);
+    try {
+      await api.delete("/stream/token");
+      setToken("");
+      setEnabled(false);
+      toast("Publish auth disabled", { icon: "⚠" });
+    } catch (e) {
+      toast.error("Could not disable token");
+    } finally { setBusy(false); }
+  };
+
+  const copy = async (text, label = "Copied") => {
+    try { await navigator.clipboard.writeText(text); toast.success(label); }
+    catch (_) { toast.error("Clipboard blocked"); }
+  };
+  const mask = (t) => (t.length <= 6 ? "•".repeat(t.length) : `${t.slice(0, 3)}${"•".repeat(t.length - 6)}${t.slice(-3)}`);
+
   return (
     <div className="hud-panel p-5 sm:p-6" data-testid="obs-setup-card">
       <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-2">
         <Video size={18} className="text-[var(--kink-purple)]" /> OBS Stream Setup
       </h2>
       <p className="text-[var(--kink-text-2)] text-sm mb-4">
-        Sub-second WebRTC ingest. In OBS 30+ pick <span className="text-white">Settings → Stream → Service: WHIP</span>, then paste the URL below. Leave the bearer token empty.
+        Sub-second WebRTC ingest. In OBS 30+ pick <span className="text-white">Settings → Stream → Service: WHIP</span>, paste the URL below, and the bearer token if you turn auth on.
       </p>
-      <div className="flex items-stretch gap-2 mb-3">
+
+      <label className="font-display text-[10px] tracking-[0.2em] text-[var(--kink-muted)] block mb-1.5">WHIP URL</label>
+      <div className="flex items-stretch gap-2 mb-4">
         <code
           data-testid="obs-whip-url"
           className="flex-1 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-3 py-2.5 font-mono-data text-xs sm:text-sm text-[var(--kink-text-2)] break-all"
@@ -254,17 +296,102 @@ export function ObsStreamSetup({ localUrl }) {
           {whipUrl}
         </code>
         <button
-          onClick={copy}
+          onClick={() => copy(whipUrl, "WHIP URL copied")}
           data-testid="obs-copy-whip"
-          className="bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.1em] px-4 text-xs active:scale-95 transition-transform"
+          className="bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.1em] px-4 text-xs active:scale-95 transition-transform inline-flex items-center gap-1.5"
         >
-          COPY
+          <Copy size={13} /> COPY
         </button>
       </div>
-      <ul className="font-mono-data text-[11px] text-[var(--kink-muted)] space-y-1 list-disc list-inside">
-        <li>Use encoder <span className="text-[var(--kink-text-2)]">H.264 (x264 or NVENC)</span>, keyframe interval ≤ 2s.</li>
-        <li>Bitrate ~2500-5000 kbps is plenty; opus audio is optional.</li>
-        <li>Only one publisher at a time — starting a new stream replaces the previous.</li>
+
+      {/* Publish token controls */}
+      <div className="border-t border-[var(--kink-overlay)] pt-4 mt-2" data-testid="obs-token-section">
+        <div className="flex items-center justify-between mb-3">
+          <label className="font-display text-[10px] tracking-[0.2em] text-[var(--kink-muted)] flex items-center gap-1.5">
+            {enabled ? <ShieldCheck size={12} className="text-[var(--kink-purple)]" /> : <ShieldOff size={12} />}
+            PUBLISH TOKEN
+          </label>
+          <span
+            className={`font-mono-data text-[10px] tracking-[0.15em] px-2 py-0.5 border ${
+              enabled
+                ? "border-[var(--kink-purple)]/50 text-[var(--kink-purple)]"
+                : "border-[var(--kink-overlay)] text-[var(--kink-muted)]"
+            }`}
+            data-testid="obs-token-status"
+          >
+            {enabled ? "AUTH ON" : "AUTH OFF"}
+          </span>
+        </div>
+
+        {enabled ? (
+          <>
+            <div className="flex items-stretch gap-2 mb-3">
+              <code
+                data-testid="obs-token-value"
+                className="flex-1 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-3 py-2.5 font-mono-data text-xs text-[var(--kink-text-2)] break-all"
+              >
+                {reveal ? token : mask(token)}
+              </code>
+              <button
+                onClick={() => setReveal((r) => !r)}
+                data-testid="obs-token-reveal"
+                title={reveal ? "Hide" : "Reveal"}
+                className="border border-[var(--kink-overlay)] px-3 hover:border-[var(--kink-purple)]/50 hover:text-[var(--kink-purple)] transition-colors"
+              >
+                {reveal ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+              <button
+                onClick={() => copy(token, "Publish token copied")}
+                data-testid="obs-token-copy"
+                title="Copy token"
+                className="border border-[var(--kink-overlay)] px-3 hover:border-[var(--kink-purple)]/50 hover:text-[var(--kink-purple)] transition-colors"
+              >
+                <Copy size={14} />
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={generate}
+                disabled={busy}
+                data-testid="obs-token-rotate"
+                className="inline-flex items-center gap-1.5 border border-[var(--kink-overlay)] px-3 py-2 font-mono-data text-[11px] hover:border-[var(--kink-purple)]/50 hover:text-[var(--kink-purple)] transition-colors disabled:opacity-40"
+              >
+                <RefreshCw size={13} /> ROTATE
+              </button>
+              <button
+                onClick={disable}
+                disabled={busy}
+                data-testid="obs-token-disable"
+                className="inline-flex items-center gap-1.5 border border-[var(--kink-overlay)] px-3 py-2 font-mono-data text-[11px] hover:border-[var(--kink-danger)] hover:text-[var(--kink-danger)] transition-colors disabled:opacity-40"
+              >
+                <ShieldOff size={13} /> DISABLE AUTH
+              </button>
+            </div>
+            <p className="font-mono-data text-[11px] text-[var(--kink-muted)] mt-3">
+              In OBS 30+: <span className="text-[var(--kink-text-2)]">Settings → Stream → Bearer Token</span> — paste the value above. Rotating invalidates the old token instantly.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="font-mono-data text-[11px] text-[var(--kink-muted)] mb-3">
+              Anyone who can reach this URL can publish. Turn on auth so only OBS with your bearer token gets in.
+            </p>
+            <button
+              onClick={generate}
+              disabled={busy}
+              data-testid="obs-token-enable"
+              className="w-full bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.1em] py-2.5 active:scale-95 transition-transform disabled:opacity-50 inline-flex items-center justify-center gap-2"
+            >
+              <ShieldCheck size={14} /> GENERATE PUBLISH TOKEN
+            </button>
+          </>
+        )}
+      </div>
+
+      <ul className="font-mono-data text-[11px] text-[var(--kink-muted)] space-y-1 list-disc list-inside mt-4">
+        <li>Encoder <span className="text-[var(--kink-text-2)]">H.264 (x264/NVENC)</span>, keyframe interval ≤ 2s.</li>
+        <li>~2500-5000 kbps is plenty; opus audio optional.</li>
+        <li>Only one publisher at a time — a new stream replaces the old.</li>
       </ul>
     </div>
   );
