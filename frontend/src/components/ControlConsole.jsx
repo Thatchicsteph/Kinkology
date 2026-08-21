@@ -230,7 +230,7 @@ export function ControlConsole({ onCommand, disabled = false, autoStart = false,
 
       <div className={disabled ? "opacity-40 pointer-events-none" : ""}>
         <span className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)] block mb-3">PATTERN</span>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-2">
           {PATTERNS.map((p) => (
             <button
               key={p.idx}
@@ -255,7 +255,7 @@ export function ControlConsole({ onCommand, disabled = false, autoStart = false,
         <span className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)] flex items-center gap-2 mb-3">
           <Zap size={14} className="text-[var(--kink-purple)]" /> AUTO PROGRAMS
         </span>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {PROGRAMS.map((p) => (
             <button
               key={p.id}
