@@ -32,8 +32,19 @@ function StatusPill({ ok, okText, offText }) {
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const toys = useToys();
-  const ble = useBleHost({ onCommand: toys.handleCommand });
+  const bleRef = useRef(null);
+  const toys = useToys({
+    onStatusChange: ({ available, pattern }) => {
+      // Owner side is the single source of truth for whether toys exist.
+      // Push it up to the backend so guests know whether to render the toys UI.
+      bleRef.current?.sendHostMessage({ type: "toys_status", available, pattern });
+    },
+  });
+  const ble = useBleHost({
+    onCommand: toys.handleCommand,
+    onToyCommand: toys.applyRemoteCommand,
+  });
+  bleRef.current = ble;
   const hr = useHeartRate();
 
   const [codes, setCodes] = useState([]);

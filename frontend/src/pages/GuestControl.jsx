@@ -4,6 +4,7 @@ import { api, WS_BASE, fmtTime } from "@/lib/api";
 import { ControlConsole } from "@/components/ControlConsole";
 import { TimerDisplay } from "@/components/TimerDisplay";
 import { ObsStream } from "@/components/ObsStream";
+import { GuestToys } from "@/components/GuestToys";
 import { Loader2, XCircle, Clock, Users } from "lucide-react";
 import kinkologyMark from "@/assets/kinkology-mark.png";
 import { toast } from "sonner";
@@ -69,6 +70,12 @@ export default function GuestControl() {
   const sendCommand = (cmd) => {
     if (wsRef.current && wsRef.current.readyState === 1) {
       wsRef.current.send(JSON.stringify({ type: "command", cmd }));
+    }
+  };
+
+  const sendToyCommand = (cmd) => {
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "toy_command", cmd }));
     }
   };
 
@@ -160,8 +167,11 @@ export default function GuestControl() {
             )}
           </div>
         </div>
-        <div className="hud-panel p-5 sm:p-6">
+        <div className="hud-panel p-5 sm:p-6 space-y-5">
           <ControlConsole onCommand={sendCommand} disabled={false} autoStart limits={snap.limits} />
+          {snap.toys?.available && (
+            <GuestToys onCommand={sendToyCommand} activePattern={snap.toys?.pattern || null} />
+          )}
         </div>
       </div>
     </Shell>

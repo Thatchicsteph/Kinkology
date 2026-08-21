@@ -3,7 +3,7 @@ import { WS_BASE, API } from "@/lib/api";
 import { OSSM } from "@/lib/ossm";
 import { toast } from "sonner";
 
-export function useBleHost({ onCommand } = {}) {
+export function useBleHost({ onCommand, onToyCommand } = {}) {
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [wsConnected, setWsConnected] = useState(false);
@@ -51,9 +51,12 @@ export function useBleHost({ onCommand } = {}) {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === "command" && msg.cmd) writeCommand(msg.cmd);
+        else if (msg.type === "toy_command" && msg.cmd && onToyCommand) {
+          try { onToyCommand(msg.cmd); } catch (e) { console.error("onToyCommand handler failed", e); }
+        }
       } catch (e) {}
     };
-  }, [writeCommand]);
+  }, [writeCommand, onToyCommand]);
 
   const closeHostWs = useCallback(() => {
     if (wsRef.current) {

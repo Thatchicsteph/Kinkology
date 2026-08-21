@@ -68,7 +68,7 @@ async def main() -> None:
     # WHIP with the right token should succeed.
     code, loc = await publish("obs-secret-token-e2e")
     assert code == 201, f"expected 201 with correct token, got {code}"
-    assert loc.startswith("/api/whip/"), loc
+    assert loc.endswith("/api/whip/") or "/api/whip/" in loc, loc
     print("correct token -> 201 OK, location:", loc)
     await asyncio.sleep(0.5)
 

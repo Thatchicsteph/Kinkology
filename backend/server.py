@@ -56,8 +56,22 @@ COMMAND_RE = re.compile(
     r'|stream:(0|[1-9][0-9]?|100):[0-9]+)$'
 )
 
+# Toy commands the active guest is allowed to send. Owner's browser translates
+# these into Intiface / Buttplug calls; the backend is a dumb relay.
+#   toy:vibrate:<0-100>   set intensity on every connected toy
+#   toy:pattern:<slug>    start a named preset from vibrationPatterns.js
+#   toy:stop              stop pattern + zero all toys
+TOY_COMMAND_RE = re.compile(
+    r'^(toy:vibrate:(0|[1-9][0-9]?|100)'
+    r'|toy:pattern:[a-z0-9_\-]{1,32}'
+    r'|toy:stop)$'
+)
+
 def is_valid_command(cmd: str) -> bool:
     return bool(COMMAND_RE.match(cmd))
+
+def is_valid_toy_command(cmd: str) -> bool:
+    return bool(TOY_COMMAND_RE.match(cmd))
 
 # ------------------------------------------------------------------
 # Auth helpers
@@ -270,6 +284,11 @@ class Hub:
         self.hr_sync_started: Optional[float] = None
         self.motion_accum: float = 0.0
         self.motion_start: Optional[float] = None
+        # Toys (Lovense / Intiface) live on the owner's browser. We just track
+        # what the owner reports so guests know whether the toy controls should
+        # appear on their console.
+        self.toys_available: bool = False
+        self.toys_pattern: Optional[str] = None
         self.lock = asyncio.Lock()
 
     def _update_motion(self, speed: int):
@@ -469,6 +488,22 @@ class Hub:
         await self.send_to_host({"type": "command", "cmd": cmd})
         await self.push_telemetry()
 
+    async def handle_toy_command(self, cid: str, cmd: str):
+        """Relay a toy command from the active guest to the owner's browser.
+        Owner-side `useToys` interprets it against the actual Intiface client."""
+        if cid != self.active_id:
+            return
+        if not is_valid_toy_command(cmd):
+            return
+        if not self.toys_available:
+            return  # owner isn't hosting any toys — silently drop
+        if cmd.startswith("toy:pattern:"):
+            self.toys_pattern = cmd.split(":", 2)[2]
+        elif cmd == "toy:stop" or cmd.startswith("toy:vibrate:"):
+            # A direct nudge or stop clears the "running pattern" indicator.
+            self.toys_pattern = None
+        await self.send_to_host({"type": "toy_command", "cmd": cmd})
+
     def client_status(self, cid: str) -> dict:
         if cid == self.active_id:
             return {"status": "active", "position": 0, "remaining_seconds": self.active_remaining()}
@@ -500,6 +535,7 @@ class Hub:
             "queue": queue_view,
             "queue_length": len(self.queue),
             "limits": self.limits,
+            "toys": {"available": self.toys_available, "pattern": self.toys_pattern},
         }
 
     async def broadcast(self):
@@ -907,6 +943,10 @@ async def ws_host(ws: WebSocket):
                     changed = True
                 if changed:
                     await hub.push_telemetry()
+            elif t == "toys_status":
+                hub.toys_available = bool(data.get("available"))
+                hub.toys_pattern = (data.get("pattern") or None)
+                await hub.broadcast()
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -914,6 +954,8 @@ async def ws_host(ws: WebSocket):
     finally:
         if hub.host_ws is ws:
             hub.host_ws = None
+            hub.toys_available = False
+            hub.toys_pattern = None
             await log_event("session", "device_disconnected", actor="owner")
         await hub.broadcast()
 
@@ -940,6 +982,9 @@ async def ws_control(ws: WebSocket, code: str):
             if data.get("type") == "command":
                 async with hub.lock:
                     await hub.handle_command(cid, str(data.get("cmd", "")))
+            elif data.get("type") == "toy_command":
+                async with hub.lock:
+                    await hub.handle_toy_command(cid, str(data.get("cmd", "")))
     except WebSocketDisconnect:
         pass
     except Exception:

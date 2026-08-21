@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ButtplugClient, DEFAULT_INTIFACE_WS } from "@/lib/buttplug";
 import { getPattern } from "@/lib/vibrationPatterns";
 import { toast } from "sonner";
@@ -6,7 +6,11 @@ import { toast } from "sonner";
 // Manages the connection to a local Intiface Engine (Lovense + other
 // Bluetooth-compatible vibrating toys). Lives on the owner's browser, same
 // as useBleHost — Bluetooth/toy control never has to touch the server.
-export function useToys() {
+//
+// `onStatusChange({available, pattern})` is called whenever the availability
+// or the currently-running pattern changes, so the owner's page can forward
+// that to the backend for guest UI display.
+export function useToys({ onStatusChange } = {}) {
   const clientRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [devices, setDevices] = useState([]);
@@ -14,6 +18,12 @@ export function useToys() {
 
   const [activePattern, setActivePattern] = useState(null); // pattern id, or null
   const patternRef = useRef({ intervalId: null, startedAt: 0 });
+
+  // Emit status changes upward whenever the guest-visible flags change.
+  const available = connected && devices.length > 0;
+  useEffect(() => {
+    if (onStatusChange) onStatusChange({ available, pattern: activePattern });
+  }, [available, activePattern, onStatusChange]);
 
   const stopPattern = useCallback(() => {
     if (patternRef.current.intervalId) {
@@ -91,6 +101,32 @@ export function useToys() {
     setLinkedState(value);
   }, [stopPattern]);
 
+  // Interpret a `toy:*` command string coming from the active guest via the
+  // backend relay. Same rules as manual control — pattern & vibration are
+  // mutually exclusive, and any input drops LINKED-TO-SPEED so the owner's
+  // speed slider doesn't fight the guest.
+  const applyRemoteCommand = useCallback((cmdStr) => {
+    if (!clientRef.current) return;
+    const cmd = String(cmdStr || "");
+    if (cmd === "toy:stop") {
+      stopPattern();
+      clientRef.current.stopAll().catch(() => {});
+      return;
+    }
+    const vib = /^toy:vibrate:(\d+)$/.exec(cmd);
+    if (vib) {
+      stopPattern();
+      setLinkedState(false);
+      const intensity = Math.min(1, Math.max(0, Number(vib[1]) / 100));
+      clientRef.current.list().forEach((d) =>
+        clientRef.current.vibrate(d.index, intensity).catch(() => {})
+      );
+      return;
+    }
+    const pat = /^toy:pattern:(.+)$/.exec(cmd);
+    if (pat) startPattern(pat[1]);
+  }, [startPattern, stopPattern]);
+
   // Fed every OSSM command string (owner test console, guest relay, auto
   // programs — they all funnel through one place). When linked, mirrors
   // SPEED onto every connected toy's vibration intensity.
@@ -117,5 +153,6 @@ export function useToys() {
     startPattern,
     stopPattern,
     handleCommand,
+    applyRemoteCommand,
   };
 }
