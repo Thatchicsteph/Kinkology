@@ -5,6 +5,7 @@ import { ControlConsole } from "@/components/ControlConsole";
 import { TimerDisplay } from "@/components/TimerDisplay";
 import { ObsStream } from "@/components/ObsStream";
 import { GuestToys } from "@/components/GuestToys";
+import { ChatPanel } from "@/components/ChatPanel";
 import { Loader2, XCircle, Clock, Users } from "lucide-react";
 import kinkologyMark from "@/assets/kinkology-mark.png";
 import { toast } from "sonner";
@@ -32,6 +33,7 @@ export default function GuestControl() {
   const [phase, setPhase] = useState("checking"); // checking|invalid|connecting|waiting|active|ended
   const [meta, setMeta] = useState(null);
   const [snap, setSnap] = useState({ you: null, active: null, queue: [], host_connected: false });
+  const [chatMsgs, setChatMsgs] = useState([]);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -62,6 +64,9 @@ export default function GuestControl() {
         setSnap(msg);
         setPhase(msg.you?.status === "active" ? "active" : "waiting");
       }
+      if (msg.type === "chat_history") setChatMsgs(msg.messages || []);
+      if (msg.type === "chat_msg") setChatMsgs((prev) => [...prev, msg.message].slice(-50));
+      if (msg.type === "chat_cleared") setChatMsgs([]);
     };
     ws.onclose = () => setPhase((p) => (p === "ended" || p === "invalid" ? p : "ended"));
     ws.onerror = () => {};
@@ -76,6 +81,12 @@ export default function GuestControl() {
   const sendToyCommand = (cmd) => {
     if (wsRef.current && wsRef.current.readyState === 1) {
       wsRef.current.send(JSON.stringify({ type: "toy_command", cmd }));
+    }
+  };
+
+  const sendChat = (text) => {
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "chat", text }));
     }
   };
 
@@ -127,25 +138,36 @@ export default function GuestControl() {
           data-testid="waiting-state"
         >
           <ObsStream />
-          <div className="hud-panel px-6 sm:px-10 py-10 sm:py-14 w-full text-center lg:sticky lg:top-6">
-            <Users className="text-[var(--kink-purple)] mx-auto" size={32} />
-            <p className="font-display text-xs tracking-[0.2em] text-[var(--kink-text-2)] mt-4">YOU ARE IN THE QUEUE</p>
-            <p
-              className="font-mono-data font-extrabold text-6xl sm:text-7xl lg:text-8xl text-[var(--kink-purple)] text-glow-purple mt-3"
-              data-testid="queue-position"
-            >
-              #{pos}
-            </p>
-            <p className="text-[var(--kink-text-2)] text-sm mt-4">
-              {snap.active ? (
-                <>In control now: <span className="text-white">{snap.active.label}</span> · {fmtTime(snap.active.remaining_seconds)} left</>
-              ) : (
-                "Waiting for the device host…"
+          <div className="space-y-4 lg:sticky lg:top-6">
+            <div className="hud-panel px-6 sm:px-10 py-10 sm:py-14 w-full text-center">
+              <Users className="text-[var(--kink-purple)] mx-auto" size={32} />
+              <p className="font-display text-xs tracking-[0.2em] text-[var(--kink-text-2)] mt-4">YOU ARE IN THE QUEUE</p>
+              <p
+                className="font-mono-data font-extrabold text-6xl sm:text-7xl lg:text-8xl text-[var(--kink-purple)] text-glow-purple mt-3"
+                data-testid="queue-position"
+              >
+                #{pos}
+              </p>
+              <p className="text-[var(--kink-text-2)] text-sm mt-4">
+                {snap.active ? (
+                  <>In control now: <span className="text-white">{snap.active.label}</span> · {fmtTime(snap.active.remaining_seconds)} left</>
+                ) : (
+                  "Waiting for the device host…"
+                )}
+              </p>
+              {!snap.host_connected && (
+                <p className="font-mono-data text-xs text-[var(--kink-danger)] mt-4">⚠ Device host offline</p>
               )}
-            </p>
-            {!snap.host_connected && (
-              <p className="font-mono-data text-xs text-[var(--kink-danger)] mt-4">⚠ Device host offline</p>
-            )}
+            </div>
+            <div className="hud-panel p-5 sm:p-6">
+              <ChatPanel
+                messages={chatMsgs}
+                onSend={sendChat}
+                selfLabel={snap.label || "Guest"}
+                title="CHAT"
+                compact
+              />
+            </div>
           </div>
         </div>
       </Shell>
@@ -166,11 +188,24 @@ export default function GuestControl() {
               </p>
             )}
           </div>
+          <div className="hud-panel p-5 sm:p-6">
+            <ChatPanel
+              messages={chatMsgs}
+              onSend={sendChat}
+              selfLabel={snap.label || "You"}
+              title="CHAT"
+              compact
+            />
+          </div>
         </div>
         <div className="hud-panel p-5 sm:p-6 space-y-5">
           <ControlConsole onCommand={sendCommand} disabled={false} autoStart limits={snap.limits} />
           {snap.toys?.available && (
-            <GuestToys onCommand={sendToyCommand} activePattern={snap.toys?.pattern || null} />
+            <GuestToys
+              onCommand={sendToyCommand}
+              activePattern={snap.toys?.pattern || null}
+              locked={!!snap.toys?.locked}
+            />
           )}
         </div>
       </div>

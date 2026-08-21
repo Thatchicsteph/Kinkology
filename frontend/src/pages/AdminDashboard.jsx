@@ -12,6 +12,7 @@ import { RecentActivity } from "@/components/RecentActivity";
 import { HeartRateSync } from "@/components/HeartRateSync";
 import { ToysPanel } from "@/components/ToysPanel";
 import { ObsStream, ObsStreamSetup } from "@/components/ObsStream";
+import { ChatPanel } from "@/components/ChatPanel";
 import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
 import { LogOut, Bluetooth, BluetoothConnected, Power, SkipForward, Plus, Copy, Trash2, Ban, Clock, Activity, Ticket, Sliders, Heart } from "lucide-react";
@@ -40,9 +41,18 @@ export default function AdminDashboard() {
       bleRef.current?.sendHostMessage({ type: "toys_status", available, pattern });
     },
   });
+  const [toysLocked, setToysLocked] = useState(false);
+  const [chatMsgs, setChatMsgs] = useState([]);
   const ble = useBleHost({
     onCommand: toys.handleCommand,
     onToyCommand: toys.applyRemoteCommand,
+    onToysLock: (locked) => {
+      setToysLocked(locked);
+      if (locked) toys.stopAllToys();
+    },
+    onChatHistory: (msgs) => setChatMsgs(msgs),
+    onChatMsg: (m) => setChatMsgs((prev) => [...prev, m].slice(-50)),
+    onChatCleared: () => setChatMsgs([]),
   });
   bleRef.current = ble;
   const hr = useHeartRate();
@@ -149,6 +159,20 @@ export default function AdminDashboard() {
   const stopAll = async () => { await api.post("/session/stop"); toast("Emergency stop sent", { icon: "⛔" }); };
   const skip = async () => { await api.post("/session/skip"); loadState(); toast("Skipped to next guest"); };
 
+  const toggleToysLock = async () => {
+    try {
+      const { data } = await api.post(`/session/toys/${toysLocked ? "unlock" : "lock"}`);
+      setToysLocked(data.locked);
+      toast(data.locked ? "Guest toys LOCKED" : "Guest toys unlocked", { icon: data.locked ? "🔒" : "🔓" });
+    } catch (e) { toast.error("Could not toggle toy lock"); }
+  };
+
+  const sendChat = (text) => ble.sendHostMessage({ type: "chat", text });
+  const clearChat = async () => {
+    try { await api.delete("/session/chat"); toast("Chat cleared"); }
+    catch (e) { toast.error("Could not clear chat"); }
+  };
+
   const doLogout = async () => { await logout(); navigate("/admin/login"); };
 
   return (
@@ -235,7 +259,7 @@ export default function AdminDashboard() {
         )}
       </div>
 
-      <ToysPanel toys={toys} />
+      <ToysPanel toys={toys} locked={toysLocked} onToggleLock={toggleToysLock} />
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Live session monitor */}
@@ -263,6 +287,17 @@ export default function AdminDashboard() {
             </div>
 
             <LiveQueue active={state.active} queue={state.queue} />
+
+            <div className="mt-6 pt-6 border-t border-[var(--kink-overlay)]">
+              <ChatPanel
+                messages={chatMsgs}
+                onSend={sendChat}
+                onClear={clearChat}
+                canClear
+                selfLabel="Owner"
+                title="SESSION CHAT"
+              />
+            </div>
           </div>
           <RecentActivity />
         </section>

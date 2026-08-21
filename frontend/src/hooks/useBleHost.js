@@ -3,7 +3,7 @@ import { WS_BASE, API } from "@/lib/api";
 import { OSSM } from "@/lib/ossm";
 import { toast } from "sonner";
 
-export function useBleHost({ onCommand, onToyCommand } = {}) {
+export function useBleHost({ onCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared } = {}) {
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [wsConnected, setWsConnected] = useState(false);
@@ -53,10 +53,18 @@ export function useBleHost({ onCommand, onToyCommand } = {}) {
         if (msg.type === "command" && msg.cmd) writeCommand(msg.cmd);
         else if (msg.type === "toy_command" && msg.cmd && onToyCommand) {
           try { onToyCommand(msg.cmd); } catch (e) { console.error("onToyCommand handler failed", e); }
+        } else if (msg.type === "toys_lock" && onToysLock) {
+          try { onToysLock(!!msg.locked); } catch (e) {}
+        } else if (msg.type === "chat_history" && onChatHistory) {
+          try { onChatHistory(msg.messages || []); } catch (e) {}
+        } else if (msg.type === "chat_msg" && onChatMsg) {
+          try { onChatMsg(msg.message); } catch (e) {}
+        } else if (msg.type === "chat_cleared" && onChatCleared) {
+          try { onChatCleared(); } catch (e) {}
         }
       } catch (e) {}
     };
-  }, [writeCommand, onToyCommand]);
+  }, [writeCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared]);
 
   const closeHostWs = useCallback(() => {
     if (wsRef.current) {

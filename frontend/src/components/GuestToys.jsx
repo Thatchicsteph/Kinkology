@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Vibrate, Square, Play } from "lucide-react";
+import { Vibrate, Square, Play, Lock } from "lucide-react";
 import { VIBRATION_PATTERNS } from "@/lib/vibrationPatterns";
 
 /**
@@ -8,8 +8,10 @@ import { VIBRATION_PATTERNS } from "@/lib/vibrationPatterns";
  * we use for OSSM commands. The backend relays them to the owner.
  *
  * Only rendered when the backend reports `snap.toys.available === true`.
+ * When `locked` is true, the owner has hit the kill switch — controls are
+ * greyed out and any input is dropped by the backend anyway.
  */
-export function GuestToys({ onCommand, activePattern }) {
+export function GuestToys({ onCommand, activePattern, locked = false }) {
   const [intensity, setIntensity] = useState(0);
   // Throttle vibration nudges so we don't flood the WS with every rAF tick.
   const lastSent = useRef({ v: -1, t: 0 });
@@ -40,15 +42,25 @@ export function GuestToys({ onCommand, activePattern }) {
         <span className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)] flex items-center gap-2">
           <Vibrate size={14} className="text-[var(--kink-purple)]" /> TOYS
         </span>
-        <button
-          onClick={stop}
-          data-testid="guest-toys-stop"
-          className="inline-flex items-center gap-1.5 border border-[var(--kink-overlay)] px-3 py-1.5 font-mono-data text-[11px] hover:border-[var(--kink-danger)] hover:text-[var(--kink-danger)] transition-colors"
-        >
-          <Square size={11} /> STOP
-        </button>
+        {locked ? (
+          <span
+            data-testid="guest-toys-locked"
+            className="inline-flex items-center gap-1.5 font-mono-data text-[10px] tracking-[0.15em] px-2 py-1 border border-[var(--kink-danger)] text-[var(--kink-danger)]"
+          >
+            <Lock size={11} /> PAUSED BY OWNER
+          </span>
+        ) : (
+          <button
+            onClick={stop}
+            data-testid="guest-toys-stop"
+            className="inline-flex items-center gap-1.5 border border-[var(--kink-overlay)] px-3 py-1.5 font-mono-data text-[11px] hover:border-[var(--kink-danger)] hover:text-[var(--kink-danger)] transition-colors"
+          >
+            <Square size={11} /> STOP
+          </button>
+        )}
       </div>
 
+      <div className={locked ? "opacity-40 pointer-events-none select-none" : ""}>
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1.5">
           <label className="font-mono-data text-[10px] text-[var(--kink-muted)] uppercase tracking-wide">
@@ -97,6 +109,7 @@ export function GuestToys({ onCommand, activePattern }) {
             );
           })}
         </div>
+      </div>
       </div>
     </div>
   );

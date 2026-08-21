@@ -286,9 +286,17 @@ class Hub:
         self.motion_start: Optional[float] = None
         # Toys (Lovense / Intiface) live on the owner's browser. We just track
         # what the owner reports so guests know whether the toy controls should
-        # appear on their console.
+        # appear on their console. `toys_locked` is an owner-triggered kill
+        # switch: while True, guest toy commands are dropped and the owner's
+        # browser is told to stop all toys.
         self.toys_available: bool = False
         self.toys_pattern: Optional[str] = None
+        self.toys_locked: bool = False
+        # In-memory chat: last 50 messages, oldest first. Each entry:
+        #   {"id": str, "author": str, "role": "owner"|"guest", "text": str, "ts": iso}
+        self.chat_msgs: List[dict] = []
+        # Per-sender rate limit: 1 message / 1s minimum gap.
+        self.chat_last_sent: Dict[str, float] = {}
         self.lock = asyncio.Lock()
 
     def _update_motion(self, speed: int):
@@ -497,12 +505,61 @@ class Hub:
             return
         if not self.toys_available:
             return  # owner isn't hosting any toys — silently drop
+        if self.toys_locked:
+            return  # owner has paused guest toy control
         if cmd.startswith("toy:pattern:"):
             self.toys_pattern = cmd.split(":", 2)[2]
         elif cmd == "toy:stop" or cmd.startswith("toy:vibrate:"):
             # A direct nudge or stop clears the "running pattern" indicator.
             self.toys_pattern = None
         await self.send_to_host({"type": "toy_command", "cmd": cmd})
+
+    CHAT_MAX_LEN = 250
+    CHAT_HISTORY = 50
+    CHAT_MIN_GAP = 1.0  # seconds between messages from the same sender
+
+    def _rate_limit(self, sender_id: str) -> bool:
+        now = time.monotonic()
+        last = self.chat_last_sent.get(sender_id, 0.0)
+        if now - last < self.CHAT_MIN_GAP:
+            return False
+        self.chat_last_sent[sender_id] = now
+        return True
+
+    async def _append_chat(self, author: str, role: str, text: str, sender_id: str) -> Optional[dict]:
+        text = (text or "").strip()
+        if not text:
+            return None
+        if len(text) > self.CHAT_MAX_LEN:
+            text = text[: self.CHAT_MAX_LEN]
+        if not self._rate_limit(sender_id):
+            return None
+        msg = {
+            "id": secrets.token_hex(6),
+            "author": author,
+            "role": role,
+            "text": text,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        self.chat_msgs.append(msg)
+        if len(self.chat_msgs) > self.CHAT_HISTORY:
+            self.chat_msgs = self.chat_msgs[-self.CHAT_HISTORY :]
+        # Fan out to everyone connected.
+        frame = {"type": "chat_msg", "message": msg}
+        await self.send_to_host(frame)
+        for c in list(self.clients.values()):
+            await self._send(c["ws"], frame)
+        return msg
+
+    async def handle_guest_chat(self, cid: str, text: str):
+        client = self.clients.get(cid)
+        if not client:
+            return
+        author = self._safe_label(client)
+        await self._append_chat(author=author, role="guest", text=text, sender_id=f"g:{cid}")
+
+    async def handle_owner_chat(self, text: str):
+        await self._append_chat(author="Owner", role="owner", text=text, sender_id="owner")
 
     def client_status(self, cid: str) -> dict:
         if cid == self.active_id:
@@ -535,7 +592,7 @@ class Hub:
             "queue": queue_view,
             "queue_length": len(self.queue),
             "limits": self.limits,
-            "toys": {"available": self.toys_available, "pattern": self.toys_pattern},
+            "toys": {"available": self.toys_available, "pattern": self.toys_pattern, "locked": self.toys_locked},
         }
 
     async def broadcast(self):
@@ -889,6 +946,40 @@ async def session_skip(user: dict = Depends(get_current_user)):
     await log_event("security", "session_skipped", actor=user["email"])
     return {"ok": True}
 
+@api_router.post("/session/toys/lock")
+async def toys_lock(user: dict = Depends(get_current_user)):
+    """Kill switch: immediately stop toys on the owner's browser AND block
+    every subsequent guest toy command until the owner unlocks."""
+    async with hub.lock:
+        hub.toys_locked = True
+        hub.toys_pattern = None
+        await hub.send_to_host({"type": "toy_command", "cmd": "toy:stop"})
+        await hub.send_to_host({"type": "toys_lock", "locked": True})
+        await hub.broadcast()
+    await log_event("security", "toys_locked", actor=user["email"])
+    return {"ok": True, "locked": True}
+
+
+@api_router.post("/session/toys/unlock")
+async def toys_unlock(user: dict = Depends(get_current_user)):
+    async with hub.lock:
+        hub.toys_locked = False
+        await hub.send_to_host({"type": "toys_lock", "locked": False})
+        await hub.broadcast()
+    await log_event("security", "toys_unlocked", actor=user["email"])
+    return {"ok": True, "locked": False}
+
+
+@api_router.delete("/session/chat")
+async def clear_chat(user: dict = Depends(get_current_user)):
+    async with hub.lock:
+        hub.chat_msgs = []
+        frame = {"type": "chat_cleared"}
+        await hub.send_to_host(frame)
+        for c in list(hub.clients.values()):
+            await hub._send(c["ws"], frame)
+    return {"ok": True}
+
 # ------------------------------------------------------------------
 # WebSockets
 # ------------------------------------------------------------------
@@ -903,6 +994,9 @@ async def ws_host(ws: WebSocket):
     await ws.accept()
     hub.host_ws = ws
     await log_event("session", "device_connected", actor="owner")
+    # Sync current lock state and chat history to the owner's newly-opened WS.
+    await hub._send(ws, {"type": "toys_lock", "locked": hub.toys_locked})
+    await hub._send(ws, {"type": "chat_history", "messages": hub.chat_msgs})
     await hub.broadcast()
     try:
         while True:
@@ -947,6 +1041,9 @@ async def ws_host(ws: WebSocket):
                 hub.toys_available = bool(data.get("available"))
                 hub.toys_pattern = (data.get("pattern") or None)
                 await hub.broadcast()
+            elif t == "chat":
+                async with hub.lock:
+                    await hub.handle_owner_chat(str(data.get("text", "")))
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -976,6 +1073,9 @@ async def ws_control(ws: WebSocket, code: str):
     async with hub.lock:
         await hub.add_client(cid, ws, code, label, auto_label=not owner_label)
         await hub.broadcast()
+    # Seed the newly-joined guest with the current chat history so they don't
+    # arrive to an empty pane while everyone else is mid-conversation.
+    await hub._send(ws, {"type": "chat_history", "messages": hub.chat_msgs})
     try:
         while True:
             data = await ws.receive_json()
@@ -985,6 +1085,9 @@ async def ws_control(ws: WebSocket, code: str):
             elif data.get("type") == "toy_command":
                 async with hub.lock:
                     await hub.handle_toy_command(cid, str(data.get("cmd", "")))
+            elif data.get("type") == "chat":
+                async with hub.lock:
+                    await hub.handle_guest_chat(cid, str(data.get("text", "")))
     except WebSocketDisconnect:
         pass
     except Exception:

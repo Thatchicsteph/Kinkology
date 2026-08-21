@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Vibrate, Link2, Unlink, Power, PlugZap, Square, Play } from "lucide-react";
+import { Vibrate, Link2, Unlink, Power, PlugZap, Square, Play, Lock, Unlock } from "lucide-react";
 import { DEFAULT_INTIFACE_WS } from "@/lib/buttplug";
 import { VIBRATION_PATTERNS } from "@/lib/vibrationPatterns";
 
@@ -14,7 +14,7 @@ function StatusPill({ ok, okText, offText }) {
   );
 }
 
-export function ToysPanel({ toys }) {
+export function ToysPanel({ toys, locked = false, onToggleLock }) {
   const [url, setUrl] = useState(DEFAULT_INTIFACE_WS);
 
   return (
@@ -54,6 +54,14 @@ export function ToysPanel({ toys }) {
                 {toys.devices.length} toy{toys.devices.length === 1 ? "" : "s"} found
               </span>
             )}
+            {locked && (
+              <span
+                data-testid="toys-locked-badge"
+                className="inline-flex items-center gap-1.5 font-mono-data text-[10px] tracking-[0.15em] px-2 py-1 border border-[var(--kink-danger)] text-[var(--kink-danger)]"
+              >
+                <Lock size={11} /> GUESTS LOCKED OUT
+              </span>
+            )}
           </div>
           {!toys.connected && (
             <input
@@ -68,6 +76,20 @@ export function ToysPanel({ toys }) {
         <div className="flex items-center gap-3 shrink-0">
           {toys.connected ? (
             <>
+              {onToggleLock && (
+                <button
+                  onClick={onToggleLock}
+                  data-testid="toys-kill-switch"
+                  className={`flex items-center gap-2 border px-4 py-3 font-display text-xs tracking-[0.1em] transition-colors ${
+                    locked
+                      ? "border-[var(--kink-danger)] text-[var(--kink-danger)]"
+                      : "border-[var(--kink-overlay)] text-[var(--kink-text-2)] hover:border-[var(--kink-danger)]/60 hover:text-[var(--kink-danger)]"
+                  }`}
+                >
+                  {locked ? <Unlock size={16} /> : <Lock size={16} />}{" "}
+                  {locked ? "UNLOCK GUEST TOYS" : "LOCK GUEST TOYS"}
+                </button>
+              )}
               <button
                 onClick={() => toys.setLinked(!toys.linked)}
                 data-testid="toys-link-toggle"
