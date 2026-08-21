@@ -1,0 +1,27 @@
+{
+  "summary": "Iteration 5: Verified NEW brute-force lockout / rate-limiting on all four auth endpoints plus regression + UI. Created /app/backend/tests/test_lockout.py with 7 tests (all PASSED). (1) /api/auth/login: 5 wrong pw -> 401 each, 6th -> 429 with detail 'Too many failed attempts. Try again in 15 minutes.' and Retry-After header (~900s). (2) While locked, CORRECT password still returns 429 with Retry-After. (3) Clear-on-success: 3 wrong (401) then correct login -> 200 AND login_attempts doc deleted (verified via Mongo); subsequent wrong returns 401 not 429 (counter reset). (4) /api/auth/2fa/login: with 2FA enabled and fresh mfa_token, 5 wrong TOTP -> 401 each, 6th -> 429 with Retry-After. (5) Correct TOTP mid-sequence clears the 2fa identifier from login_attempts. (6) /api/auth/2fa/setup/verify: 5 wrong -> 400 each, 6th -> 429 with Retry-After. (7) /api/auth/2fa/disable: 5 wrong -> 400 each, 6th -> 429 with Retry-After; after clearing lockout, valid TOTP disables 2FA. Full suite: 44/44 passed (27 backend_test + 10 test_twofa + 7 test_lockout) in 25.8s. Frontend Playwright: on /admin/login submitted 6 wrong passwords via the public URL — login-error element shows 'Invalid email or password' for attempts 1-5 and 'Too many failed attempts. Try again in 15 minutes.' for attempt 6 (mapped from response.data.detail via formatApiErrorDetail). Cleanup: db.login_attempts.deleteMany({}) executed and admin user has twofa_enabled:false + no totp_secret/recovery_codes_hash/twofa_pending_secret; admin login returns 200 in a fresh state.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_lockout.py",
+    "/app/backend/tests/test_twofa.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py check_lockout raises 429 with Retry-After header (seconds) and human message using minute ceiling — matches spec.",
+    "record_failure uses find_one_and_update with $inc + upsert (single round-trip) — good; unique index on identifier prevents duplicates.",
+    "Identifier scheme '{client_ip}:{scope}:{email}' correctly isolates login/2fa/2fa-setup/2fa-disable counters; verified independently.",
+    "clear_attempts called on every success path (login, 2fa/login, 2fa/setup/verify, 2fa/disable) — counters reset correctly.",
+    "Note: x-forwarded-for is trusted as-is (first hop). Behind Kubernetes ingress this is fine, but for public deployments consider stripping/validating XFF or restricting to trusted proxies. Not a blocker.",
+    "Note: The unique index on login_attempts.identifier is created on startup; upsert handles concurrent inserts. Good."
+  ],
+  "updated_files": ["/app/backend/tests/test_lockout.py"],
+  "success_rate": {"backend": "100% (44/44)", "frontend": "100% (login-error surfaces 429 message)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 — 2FA DISABLED, login_attempts empty at end",
+  "seed_data_creation": "None. test_lockout.py clears login_attempts before/after every test and resets 2FA state in module teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Rate limiter keys on client IP + email; since test host shares one IP, always run `mongosh --quiet --eval \"db.login_attempts.deleteMany({})\" test_database` between scenarios and at end. test_lockout.py has autouse per-test and module fixtures that handle this. If a test aborts mid-2FA enrollment, run the same _reset_2fa unset command. All auth tests should be run serially (they are, single worker)."
+}

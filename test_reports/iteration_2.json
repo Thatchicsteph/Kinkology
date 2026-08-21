@@ -1,0 +1,21 @@
+{
+  "summary": "Regression test after adding websockets>=12.0 and wsproto>=1.2.0 to backend/requirements.txt. Ran full backend pytest suite (21 tests) at /app/backend/tests/backend_test.py. ALL 21 TESTS PASSED in 8s including: admin auth (login success/invalid/me/cookie), access-codes CRUD (create/list/validate/add-minutes/revoke/delete/minutes-validation), public code validation, session/state|stop|skip, and — most importantly — the WebSocket flows: host relay of valid commands (set:speed:42), rejection of invalid commands (set:speed:250, arbitrary garbage), queue promotion after active guest disconnect, time-based turn expiry via ticker_loop, and rejection of invalid access codes on ws_control. WebSocket dependency fix is confirmed working.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Regression scope only — pre-existing GuestControl.jsx remount bug from iteration_1 is unrelated to this dependency change and is outside the backend-only scope of this iteration."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Tests create TEST_-prefixed access codes and delete them in teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression suite is stable at /app/backend/tests/backend_test.py. WebSocket tests connect to ws://localhost:8001 directly (external ingress WS not required). Run: pytest /app/backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml",
+  "rca of the issue": "No new issues. Adding websockets>=12.0 and wsproto>=1.2.0 correctly enables uvicorn's WebSocket support; all four WS scenarios (host relay + command validation, queue promotion, time expiry, invalid code) pass."
+}

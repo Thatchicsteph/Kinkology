@@ -1,0 +1,48 @@
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - kinkology
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: kinkology
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (copy env.docker.example to .env)}
+    depends_on:
+      - mongo
+    networks:
+      - kinkology
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_BACKEND_URL: ""
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-ChangeMe}
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - kinkology
+
+volumes:
+  mongo_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  kinkology:

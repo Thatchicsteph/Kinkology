@@ -1,0 +1,51 @@
+{
+  "summary": "Backend: 21/21 pytest tests passed covering auth (login/invalid/me), access-codes CRUD, public validation, session state/stop/skip, and WebSockets (host relay + command regex validation, queue promotion, time expiry, invalid-code rejection). Frontend: verified admin login (valid+invalid), dashboard code CRUD (create/label/minutes, +10m, revoke shows REVOKED badge, public API returns invalid=false, delete removes card), emergency-stop/skip buttons, guest /c/{CODE} paths (invalid code screen, active console mounting, timer decrements, all sliders + 7 patterns rendered). LOGOUT works. IDENTIFIED CRITICAL FRONTEND BUG: guest ControlConsole is remounted every ~1s (4 mounts in 4s), causing START button to visibly toggle to STOP and speed to jump to 30, but immediately revert to START/0 on next WS state tick.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "GuestControl.jsx",
+        "issue": "The `Shell` wrapper component is defined *inside* the `GuestControl` function body (line ~56: `const Shell = ({ children }) => (...)`). Because a new component reference is created on every render, React treats it as a new component TYPE on each WebSocket 'state' message (1 tick/sec) and UNMOUNTS/REMOUNTS the entire child subtree, including `ControlConsole`. This resets ControlConsole's internal state every second: `running` flips back to false, `speed` back to 0, `pattern` back to 0, and slider values (`depth`, `stroke`, `sensation`) revert to their initial 60/60/50. Confirmed via MutationObserver: ControlConsole node was inserted 4 times in 4s of steady state, and 5 times after a START click. Playwright reads speed=30 immediately after clicking START, then 0 within 1.5s.",
+        "selector": "[data-testid='start-stop-button'], [data-testid='value-speed'], [data-testid='slider-*'], [data-testid='pattern-*']",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Guest active control",
+        "issue": "Because of the remount bug, guest slider drags and START/STOP toggles never persist visually beyond ~1s. Backend still receives whatever commands were dispatched during the brief mounted lifetime, but subsequent slider adjustments send from freshly re-initialised state (60/60/50/0), so guests effectively cannot maintain a running device — every ~1s the local UI resets to 0 speed and stops issuing commands.",
+        "affected_selectors": ["[data-testid='start-stop-button']","[data-testid='slider-speed']","[data-testid='slider-depth']","[data-testid='slider-stroke']","[data-testid='slider-sensation']","[data-testid='pattern-0']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/pytest.ini",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix GuestControl.jsx: hoist the `Shell` component OUT of the `GuestControl` function (module-level component), or inline the header/wrapper JSX directly in each branch. Verify by ensuring ControlConsole mounts only once per session (MutationObserver count stays at 1)."
+  ],
+  "critical_code_review_comments": [
+    "GuestControl.jsx defines `Shell` inline inside the component -> causes every child (ControlConsole, TimerDisplay) to unmount every WS tick. Textbook React antipattern; makes the guest UI unusable in practice.",
+    "GuestControl `ws.onclose = () => setPhase((p) => (p === 'ended' || p === 'invalid' ? p : 'ended'))` will show 'Session ended' screen for any transient WS drop; consider auto-reconnect.",
+    "Backend server.py `set_cookie(..., secure=True, samesite='none')` is correct for the HTTPS preview but will NOT work on plain-HTTP local self-host — consider deriving secure/samesite from a config flag so the app is usable locally as advertised.",
+    "AdminDashboard polls GET /session/state every 1s AND opens no owner-side WS; consider using the host WebSocket only, or making the poll interval configurable.",
+    "Backend Hub.host_ws is a single global; a second admin opening the dashboard silently displaces the first without notification.",
+    "COMMAND_RE is anchored (^...$) and validates 0-100 range — good. However `handle_command` silently drops invalid commands with no feedback to the guest; consider echoing a `{type:'invalid_command'}` message for debuggability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/pytest.ini"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "~85% (all admin flows OK; guest active-control functionally broken by remount bug)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md — matched)",
+  "seed_data_creation": "Tests create TEST_-prefixed codes and delete them at end. A handful of TEST_UI_*/TEST_STARTSTOP/TEST_REMOUNT codes may remain in Mongo from UI runs — safe to leave or purge via admin delete.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression suite is at /app/backend/tests/backend_test.py — run with: `pytest /app/backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml`. WebSocket tests hit ws://localhost:8001 directly (external ingress WS wasn't required). For the guest remount bug retest, use a MutationObserver on document.body counting inserts of [data-testid='control-console'] over 5s while a guest is active — expected value after fix is 1.",
+  "rca of the issue": "Symptom: Guest START button 'doesn't work' (speed stays 0, button stays START). Reproduction: (1) admin login, create a 5-min code, (2) open /c/{CODE} in a new tab, wait for control-console, (3) click start-stop-button, (4) within 50ms read value-speed -> '30' and button -> 'STOP'; (5) after 1500ms re-read -> '0' and 'START'. RCA: `/app/frontend/src/pages/GuestControl.jsx` defines `const Shell = ({children}) => (...)` inside the render function. Each render (triggered every second by the WS 'state' message setSnap+setPhase) creates a new function identity, so React reconciles Shell as a different component TYPE and unmounts+remounts the entire subtree, resetting ControlConsole's useState (running, state, pattern). Mitigation: hoist Shell to module scope (or inline the JSX). After the fix, ControlConsole should mount exactly once per session; verify with the MutationObserver test above."
+}

@@ -1,0 +1,26 @@
+{
+  "summary": "Iteration 4: End-to-end verification of NEW TOTP 2FA feature (enrollment, step-up login, recovery codes, disable) plus regression on existing suite. Created /app/backend/tests/test_twofa.py with 10 tests covering: initial disabled status, setup/start returning secret+otpauth_uri+base64 QR data URL, verify with wrong TOTP -> 400, verify with correct pyotp.TOTP(secret).now() enables 2FA and returns 10 recovery codes (XXXX-XXXX-XXXX), status flips enabled, /auth/login now returns {mfa_required:true, mfa_token} with NO full token/cookie, /auth/2fa/login with wrong code -> 401, correct TOTP -> full {token,user}, recovery code works once and reuse -> 401, disable with current TOTP works, subsequent login has no MFA requirement. Full pytest suite: 37/37 PASSED (27 existing + 10 new) in 12.8s. Frontend Playwright via public URL: (1) admin login without 2FA OK, (2) twofa-panel visible on dashboard with ENABLE 2FA button, (3) enable-2fa-button reveals twofa-qr (base64 PNG src verified) + twofa-secret (32-char base32) + twofa-setup-code input + twofa-verify-button, (4) wrong code shows twofa-setup-error inline, (5) correct computed TOTP displays recovery-codes container with 10 codes + copy-recovery-codes button, (6) re-login now shows twofa-form after password step, (7) correct TOTP in twofa-code + twofa-submit navigates to /admin, (8) twofa-toggle-recovery switches input placeholder to XXXX-XXXX-XXXX and a recovery code logs in successfully, (9) disable-2fa-toggle -> disable-2fa-code -> disable-2fa-button with valid TOTP restores ENABLE 2FA state. Clean state verified via public /api/auth/login returning a full token (no mfa_required). No frontend or backend issues found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_twofa.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py /auth/2fa/login: recovery code reuse deletion uses list comprehension (single-user, no race) — acceptable for single-admin design.",
+    "server.py /auth/2fa/disable also accepts a recovery code as fallback (line 385). Behavior is undocumented but not harmful; the primary path uses current TOTP as spec requires.",
+    "mfa_token has type='mfa' and 5-min expiry — verified working. It cannot be used as a regular access token because get_current_user checks type='access'.",
+    "Recovery codes are stored only as HMAC-SHA256 hashes (pepper=JWT_SECRET) — good.",
+    "TwoFactorPanel.jsx: recovery-codes list only shown ONCE post-enroll (as designed). Copy button uses navigator.clipboard — fine over HTTPS.",
+    "AdminLogin.jsx: expired mfa_token error correctly resets to password step (checks 'expired' substring in detail)."
+  ],
+  "updated_files": ["/app/backend/tests/test_twofa.py"],
+  "success_rate": {"backend": "100% (37/37)", "frontend": "100% (9/9 UI steps)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (2FA left DISABLED at end)",
+  "seed_data_creation": "None. All 2FA state cleared via module fixture teardown and via UI disable step.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_twofa.py always resets 2FA state via direct Mongo unset in module-scope fixture, so it is safe to re-run. If mid-test failure ever leaves 2FA enabled, run: pymongo update on users {email:'admin@ossm.local'} $set twofa_enabled:false, $unset totp_secret/recovery_codes_hash/twofa_pending_secret. Frontend flow reads the base32 secret from data-testid='twofa-secret' text, then uses pyotp.TOTP(secret).now() to compute codes. Recovery codes are extracted from data-testid='recovery-codes' via regex [A-Z0-9]{4}-{4}-{4}. localStorage key is 'ossm_token'."
+}

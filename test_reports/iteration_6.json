@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 6: Verified NEW public live-telemetry overlay feature (backend WS + REST + React overlay page + admin dashboard link card) + full regression. Created /app/backend/tests/test_overlay.py with 3 tests: (1) GET /api/overlay/state returns type='telemetry' + all 10 fields with no auth (200). (2) WS /api/ws/overlay connects with no auth and immediately pushes an initial telemetry frame. (3) End-to-end relay test: created access code, connected control WS, sent set:depth:70, set:stroke:55, set:sensation:40, set:speed:95 with max_speed=70 -> overlay frame shows speed=70 (CLAMPED), depth=70, stroke=55, sensation=40, running=true, controller='TEST_OV_RELAY'; GET /api/overlay/state matches. After ~2s, run_seconds >= 2 and session_seconds >= 2. After set:speed:0, running=false and run_seconds stops growing. On guest WS disconnect, overlay frame resets: speed/depth/stroke/sensation=0, controller=null, run_seconds=0. Full regression suite: 47/47 passed in 45.7s (27 backend_test + 10 twofa + 7 lockout + 3 overlay). Frontend Playwright via external URL: /overlay page renders overlay-root + overlay-runtime + overlay-session + overlay-status + 4 metric panels (speed/depth/stroke/sensation) each with overlay-value-<k> and SVG sparkline; status pill shows 'NO DEVICE' when no host connected (correct - LIVE only requires host_connected). Drove a real guest via WSS from a browser page: overlay-value-speed=80, depth=60, stroke=45, sensation=35, controller='TEST_UI_OVERLAY', runtime advanced to 00:03, sparkline polyline points grew from 137 -> 190 chars proving graphs are moving. /overlay?transparent=1 sets root style.background='transparent' as expected. AdminDashboard overlay-link-card present with copy-overlay-link + open-overlay-link (href='/overlay'). CLEANUP done: deleted all TEST_* access codes, reset safety limits to {0,100}, telemetry idle.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_overlay.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_twofa.py",
+    "/app/backend/tests/test_lockout.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py: Hub telemetry is fully in-memory (single active slot) which matches the app's single-device model. reset_telemetry() correctly called on promote() and end_active(); push_telemetry() called in handle_command (after clamp) and in ticker tick — so overlay updates without host being connected. Good.",
+    "Overlay WS discards dead sockets on send failure; no auth needed by design (public OBS overlay). If future public exposure is a concern, consider a short opaque token or origin allowlist.",
+    "clamp_command runs before hub.telemetry is updated, so overlay always reflects the actual value sent to host (post-clamp). Matches spec.",
+    "telemetry_frame: run_seconds computed from motion_accum + delta since motion_start (only while speed>0); session_seconds derived from active_start monotonic — no clock drift issues.",
+    "Sparkline.jsx: pushes at fixed 500ms cadence with 120-point cap (~60s window). Uses drop-shadow filter for glow — nice touch.",
+    "Overlay.jsx: reconnects WS after 1.5s on close — good resilience; no auth in URL is by design.",
+    "Minor: overlay-status shows 'LIVE' only when host_connected. When there is no BLE host but a guest is driving (test env), pill stays 'NO DEVICE' — this is correct per agent note, worth documenting in the UI copy so users don't think overlay is broken.",
+    "backend_test.py already keeps ws://localhost:8001 for WebSockets (external ingress WS uses wss on 443 which also works but slower); consistent with prior iterations."
+  ],
+  "updated_files": ["/app/backend/tests/test_overlay.py"],
+  "success_rate": {"backend": "100% (47/47)", "frontend": "100% (overlay renders, live values update, sparkline moves, transparent mode works, admin card OK)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (2FA disabled, login_attempts empty).",
+  "seed_data_creation": "None persisted. Test created and deleted access codes (TEST_OV_RELAY, TEST_UI_OVERLAY, plus stale TEST_* codes from earlier iterations); safety limits temporarily set to {0,70} then restored to {0,100}.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Overlay tests live in /app/backend/tests/test_overlay.py. They open both an overlay WS and a control WS via ws://localhost:8001 and expect the ticker (1s cadence) plus per-command push_telemetry to keep frames flowing. If retesting, ensure no lingering active guest by first hitting POST /api/session/skip. To reproduce UI: login as admin, POST /api/codes, open /overlay in one tab and open /c/{CODE} in another (or fire a WSS control connection via browser fetch as in this iteration's script) then send set:* commands; overlay values + sparklines will update within ~1s. Cleanup: delete TEST_ codes and PUT /api/settings {min_depth:0,max_speed:100}."
+}

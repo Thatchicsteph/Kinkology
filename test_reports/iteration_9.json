@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 9 — verified new first-run setup flow endpoints (needs_setup=false; POST /api/setup -> 403) and Base URLs feature end-to-end. Added /app/backend/tests/test_setup_and_urls.py (8 tests). Full backend suite 59/59 pass. Frontend: admin login, Base URLs card save+persist (populated on reload with local='http://localhost', public='https://tg30.ddns.net'), guest link copy produces 'https://tg30.ddns.net/c/<CODE>', overlay link copy produces 'http://localhost/overlay', /overlay renders telemetry, /c/<CODE> lands on control-console, safety limits, create/delete code, logout — all functional.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_setup_and_urls.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_overlay.py",
+    "/app/backend/tests/test_twofa.py",
+    "/app/backend/tests/test_lockout.py",
+    "/app/backend/tests/test_guest_activation_external.py",
+    "/app/test_reports/pytest/iteration_9_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py /api/setup and /api/setup/status correctly enforce single-admin gate (403 when users.count > 0) — verified live.",
+    "load_settings() defaults local_url/public_url to '' and PUT /api/settings/urls persists via upsert — GET reflects change and PUT /api/settings still returns url fields intact (no accidental clobber).",
+    "AdminDashboard loadLimits populates urls state from GET /api/settings; saveUrls posts to /settings/urls and re-syncs — verified persistence across reload.",
+    "Guest link builder correctly uses urls.public_url stripped of trailing slashes; overlay link builder uses urls.local_url — clipboard values confirmed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_setup_and_urls.py (new)",
+    "/app/backend/tests/backend_test.py (loosened 2 stale strict-dict-equality assertions on /api/settings now that url fields are included; test-only change, no product code touched)"
+  ],
+  "success_rate": {"backend": "100% (59/59)", "frontend": "100% (all requested flows)"},
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Only transient TEST_ codes were created and deleted during tests. Base URLs left set to local=http://localhost, public=https://tg30.ddns.net as required by the review request so subsequent UI verification retains the state.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Preview DB has a seeded admin, so setup screen never appears here — the setup HAPPY PATH is already covered by /app/test_setup_flow.py against a throwaway DB. Base URLs are persisted (local=http://localhost, public=https://tg30.ddns.net). Full backend regression is 59/59. If you touch /api/settings response shape, remember it now includes local_url/public_url; use subset assertions.",
+  "rca of the issue": "No bugs found in this iteration."
+}

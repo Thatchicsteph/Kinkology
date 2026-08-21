@@ -1,0 +1,16 @@
+# Kinkology reverse proxy — single HTTPS domain for frontend + backend.
+# Requires router port-forwards: 80 -> Mac and 443 -> Mac (for auto HTTPS).
+# Run with:  caddy run --config ./Caddyfile
+
+# Replace ChangeMe below with your own public domain.
+ChangeMe {
+    # API + WebSocket -> FastAPI backend (WebSocket upgrade handled automatically)
+    handle /api/* {
+        reverse_proxy localhost:8001
+    }
+
+    # Everything else -> React frontend
+    handle {
+        reverse_proxy localhost:3000
+    }
+}
