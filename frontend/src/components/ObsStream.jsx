@@ -121,10 +121,22 @@ export function ObsStream({ compact = false }) {
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      // Wait for ICE gathering to complete (max 2s) so the offer contains all
+      // candidates. Some WHEP servers (aiortc-based) don't yet trickle
+      // properly from a browser; sending a naked offer means the media path
+      // can only work when both peers are already on the same NAT.
+      await new Promise((resolve) => {
+        if (pc.iceGatheringState === "complete") return resolve();
+        let done = false;
+        const finish = () => { if (done) return; done = true; pc.removeEventListener("icegatheringstatechange", onChange); resolve(); };
+        const onChange = () => { if (pc.iceGatheringState === "complete") finish(); };
+        pc.addEventListener("icegatheringstatechange", onChange);
+        setTimeout(finish, 2000);
+      });
       const res = await fetch(`${API}/whep`, {
         method: "POST",
         headers: { "Content-Type": "application/sdp" },
-        body: offer.sdp,
+        body: pc.localDescription.sdp,
       });
       if (!res.ok) {
         if (res.status === 409) {

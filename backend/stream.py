@@ -629,7 +629,42 @@ async def whep_view(request: Request) -> Response:
 
 
 @router.patch("/whep/{sid}")
-async def whep_trickle(sid: str) -> Response:
+async def whep_trickle(sid: str, request: Request) -> Response:
+    """Trickle-ICE PATCH from WHEP viewers. Browsers POST their offer before
+    ICE gathering completes and trickle candidates here — if we discard them
+    the backend never learns the viewer's srflx/relay addresses and no ICE
+    pair completes on remote networks."""
+    body = (await request.body()).decode("utf-8", errors="ignore")
+    if not body.strip():
+        return Response(status_code=204)
+    async with hub.lock:
+        pc = hub.viewers.get(sid)
+    if pc is None:
+        raise HTTPException(status_code=404, detail="Unknown viewer session")
+    current_mid: Optional[str] = None
+    media_index = -1
+    added = 0
+    for raw in body.splitlines():
+        line = raw.strip()
+        if line.startswith("m="):
+            media_index += 1
+            current_mid = None
+        elif line.startswith("a=mid:"):
+            current_mid = line[6:].strip()
+        elif line.startswith("a=end-of-candidates"):
+            continue
+        elif line.startswith("a=candidate:"):
+            try:
+                cand = candidate_from_sdp(line[2:])
+                cand.sdpMid = current_mid
+                if media_index >= 0:
+                    cand.sdpMLineIndex = media_index
+                await pc.addIceCandidate(cand)
+                added += 1
+            except Exception as e:  # noqa: BLE001
+                logger.warning("WHEP %s trickle candidate rejected (%s): %s", sid, e, line)
+    if added:
+        logger.info("WHEP %s trickled %d ICE candidate(s)", sid, added)
     return Response(status_code=204)
 
 
