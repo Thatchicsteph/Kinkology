@@ -67,13 +67,24 @@ export default function GuestControl() {
       const msg = JSON.parse(ev.data);
       if (msg.type === "rejected") { setPhase("invalid"); return; }
       if (msg.type === "turn_ended" || msg.type === "expired") {
-        toast.info(msg.reason === "time_up" ? "Your time is up." : "Your turn has ended.");
-        setPhase("ended");
+        // Time's up (or manual boot) — check whether the server is keeping
+        // the socket open so we downgrade to spectator instead of showing
+        // "session ended" and closing the page.
+        if (msg.keep_connection) {
+          toast.info("Time's up — you can still watch and chat.");
+          setSnap((prev) => prev ? { ...prev, you: { ...(prev.you || {}), status: "spectator", remaining_seconds: 0 } } : prev);
+          setPhase("spectator");
+        } else {
+          toast.info(msg.reason === "time_up" ? "Your time is up." : "Your turn has ended.");
+          setPhase("ended");
+        }
         return;
       }
       if (msg.type === "state") {
         setSnap(msg);
-        setPhase(msg.you?.status === "active" ? "active" : "waiting");
+        if (msg.you?.status === "active") setPhase("active");
+        else if (msg.you?.status === "spectator") setPhase("spectator");
+        else setPhase("waiting");
       }
       if (msg.type === "chat_history") setChatMsgs(msg.messages || []);
       if (msg.type === "chat_msg") setChatMsgs((prev) => [...prev, msg.message].slice(-50));
@@ -191,6 +202,45 @@ export default function GuestControl() {
               {!snap.host_connected && (
                 <p className="font-mono-data text-xs text-[var(--kink-danger)] mt-4">⚠ Device host offline</p>
               )}
+            </div>
+            <div className="hud-panel p-5 sm:p-6">
+              <ChatPanel
+                messages={chatMsgs}
+                onSend={sendChat}
+                selfLabel={snap.label || "Guest"}
+                title="CHAT"
+                compact
+                presence={presence}
+                onTyping={sendTyping}
+              />
+            </div>
+          </div>
+        </div>
+      </Shell>
+    );
+  }
+
+  // Spectator: view-only code, or a control code whose time ran out. Same
+  // layout as active but without the control console and toy remote.
+  if (phase === "spectator" || snap.you?.status === "spectator") {
+    return (
+      <Shell code={code} wide>
+        <div
+          className="fade-up grid gap-4 lg:gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:items-start"
+          data-testid="spectator-state"
+        >
+          <ObsStream />
+          <div className="space-y-4 lg:sticky lg:top-6">
+            <div className="hud-panel p-5 sm:p-6 text-center">
+              <span
+                data-testid="spectator-badge"
+                className="inline-block font-display text-[10px] tracking-[0.2em] text-[var(--kink-purple)] border border-[var(--kink-purple)]/40 px-3 py-1"
+              >
+                VIEW ONLY
+              </span>
+              <p className="text-[var(--kink-text-2)] text-sm mt-3">
+                You can watch and chat. Ask the owner for a control code to take the wheel.
+              </p>
             </div>
             <div className="hud-panel p-5 sm:p-6">
               <ChatPanel

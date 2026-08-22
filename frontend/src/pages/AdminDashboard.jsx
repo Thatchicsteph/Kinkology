@@ -65,6 +65,7 @@ export default function AdminDashboard() {
   const [state, setState] = useState({ active: null, queue: [], queue_length: 0, host_connected: false, device_state: "" });
   const [label, setLabel] = useState("");
   const [minutes, setMinutes] = useState(10);
+  const [viewOnly, setViewOnly] = useState(false);
   const [showTest, setShowTest] = useState(false);
   const [limits, setLimits] = useState({ min_depth: 0, max_speed: 100, hr_cutoff: 0, toy_length_mm: 0, rail_travel_mm: 300, max_depth: 100 });
   const [savingLimits, setSavingLimits] = useState(false);
@@ -142,11 +143,12 @@ export default function AdminDashboard() {
   const createCode = async (e) => {
     e.preventDefault();
     try {
-      await api.post("/codes", { label, minutes: Number(minutes) });
+      await api.post("/codes", { label, minutes: viewOnly ? 0 : Number(minutes), view_only: viewOnly });
       setLabel("");
       setMinutes(10);
+      setViewOnly(false);
       loadCodes();
-      toast.success("Access code created");
+      toast.success(viewOnly ? "View-only link created" : "Access code created");
     } catch (e) { toast.error("Could not create code"); }
   };
 
@@ -471,8 +473,25 @@ export default function AdminDashboard() {
               <div>
                 <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">MINUTES OF CONTROL</label>
                 <input type="number" min={1} max={1440} value={minutes} onChange={(e) => setMinutes(e.target.value)} data-testid="code-minutes-input"
-                  className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-3 py-2.5 font-mono-data outline-none focus:border-[var(--kink-purple)] transition-colors" />
+                  disabled={viewOnly}
+                  className="w-full mt-2 bg-[var(--kink-base)] border border-[var(--kink-overlay)] px-3 py-2.5 font-mono-data outline-none focus:border-[var(--kink-purple)] transition-colors disabled:opacity-40" />
               </div>
+              <label
+                className="flex items-center gap-3 text-sm text-[var(--kink-text-2)] cursor-pointer select-none"
+                data-testid="code-view-only-row"
+              >
+                <input
+                  type="checkbox"
+                  checked={viewOnly}
+                  onChange={(e) => setViewOnly(e.target.checked)}
+                  data-testid="code-view-only-input"
+                  className="accent-[var(--kink-purple)] w-4 h-4"
+                />
+                <span>
+                  <span className="font-display text-xs tracking-[0.12em] block">VIEW-ONLY LINK</span>
+                  <span className="font-mono-data text-[10px] text-[var(--kink-muted)]">Stream + chat only. No control, no queue, no timer.</span>
+                </span>
+              </label>
               <button type="submit" data-testid="create-code-button" className="w-full flex items-center justify-center gap-2 bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.1em] py-3 active:scale-95 transition-transform">
                 <Plus size={16} /> GENERATE CODE
               </button>
@@ -485,17 +504,26 @@ export default function AdminDashboard() {
               {codes.length === 0 && <p className="font-mono-data text-sm text-[var(--kink-muted)] py-4 text-center">No codes yet.</p>}
               {codes.map((c) => (
                 <div key={c.id} data-testid={`code-${c.code}`} className={`border p-3 ${c.revoked ? "border-[var(--kink-overlay)] opacity-50" : "border-[var(--kink-overlay)]"}`}>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="font-mono-data font-bold text-xl tracking-[0.15em] text-[var(--kink-purple)]">{c.code}</span>
-                    {c.revoked && <span className="font-mono-data text-[10px] text-[var(--kink-danger)] border border-[var(--kink-danger)]/40 px-2 py-0.5">REVOKED</span>}
+                    <div className="flex items-center gap-1.5">
+                      {c.view_only && <span data-testid={`view-only-badge-${c.code}`} className="font-mono-data text-[10px] text-[var(--kink-purple)] border border-[var(--kink-purple)]/40 px-2 py-0.5">VIEW ONLY</span>}
+                      {c.revoked && <span className="font-mono-data text-[10px] text-[var(--kink-danger)] border border-[var(--kink-danger)]/40 px-2 py-0.5">REVOKED</span>}
+                    </div>
                   </div>
                   {c.label && <p className="text-sm text-[var(--kink-text-2)] mt-1">{c.label}</p>}
-                  <div className="flex items-center gap-2 mt-2 font-mono-data text-xs text-[var(--kink-muted)]">
-                    <Clock size={12} /> {fmtTime(c.remaining_seconds)} left / {Math.round(c.granted_seconds / 60)}m granted
-                  </div>
+                  {c.view_only ? (
+                    <div className="flex items-center gap-2 mt-2 font-mono-data text-xs text-[var(--kink-muted)]">
+                      <Clock size={12} /> Spectator link — no timer
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 mt-2 font-mono-data text-xs text-[var(--kink-muted)]">
+                      <Clock size={12} /> {fmtTime(c.remaining_seconds)} left / {Math.round(c.granted_seconds / 60)}m granted
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-2 mt-3">
                     <IconBtn testid={`copy-${c.code}`} onClick={() => copyLink(c.code)} icon={Copy} text="LINK" />
-                    <IconBtn testid={`addmin-${c.code}`} onClick={() => addMin(c.id)} icon={Plus} text="10M" />
+                    {!c.view_only && <IconBtn testid={`addmin-${c.code}`} onClick={() => addMin(c.id)} icon={Plus} text="10M" />}
                     {!c.revoked && <IconBtn testid={`revoke-${c.code}`} onClick={() => revoke(c.id)} icon={Ban} text="REVOKE" danger />}
                     <IconBtn testid={`delete-${c.code}`} onClick={() => del(c.id)} icon={Trash2} text="" danger />
                   </div>

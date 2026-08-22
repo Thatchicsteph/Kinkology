@@ -238,7 +238,8 @@ class TwoFALogin(BaseModel):
 
 class CodeCreate(BaseModel):
     label: str = ""
-    minutes: int = Field(gt=0, le=1440)
+    minutes: int = Field(ge=0, le=1440, default=0)
+    view_only: bool = False
 
 class SettingsInput(BaseModel):
     min_depth: int = Field(ge=0, le=100)
@@ -505,7 +506,15 @@ class Hub:
                 {"$inc": {"used_seconds": consumed},
                  "$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}},
             )
-            await self._send(client["ws"], {"type": "turn_ended", "reason": reason})
+            # When the guest's time runs out, we DON'T disconnect them anymore
+            # — they demote to view-only spectators (still see the stream, chat,
+            # and presence). For all other reasons the socket stays too; the
+            # frontend handles the `turn_ended` message.
+            if reason == "time_up":
+                client["expired"] = True
+                await self._send(client["ws"], {"type": "turn_ended", "reason": reason, "keep_connection": True})
+            else:
+                await self._send(client["ws"], {"type": "turn_ended", "reason": reason})
             await log_event("session", "turn_ended", actor=f"guest:{client['label']}",
                             target=client["code"], detail={"reason": reason, "seconds": consumed})
         # Safety: stop the device between turns
@@ -517,16 +526,27 @@ class Hub:
         self.reset_telemetry()
         await self.push_telemetry()
 
-    async def add_client(self, cid: str, ws: WebSocket, code: str, label: str, auto_label: bool = False):
+    async def add_client(self, cid: str, ws: WebSocket, code: str, label: str, auto_label: bool = False, view_only: bool = False):
         # auto_label is True when the owner didn't set a custom label for this
         # access code, so `label` fell back to the raw code itself. That raw
         # code must never be shown to *other* guests (only to the owner/host,
         # who already has it on the Manage Codes panel).
-        self.clients[cid] = {"ws": ws, "code": code, "label": label, "auto_label": auto_label}
-        if cid not in self.queue and cid != self.active_id:
+        # view_only clients bypass the control queue entirely — they see the
+        # stream and chat but can't send commands. `expired` tracks control
+        # codes whose time ran out mid-session; those stay connected as
+        # spectators (same UX as view_only from that point on).
+        self.clients[cid] = {
+            "ws": ws, "code": code, "label": label,
+            "auto_label": auto_label,
+            "view_only": view_only,
+            "expired": False,
+        }
+        # View-only clients are never queued and never become active.
+        if not view_only and cid not in self.queue and cid != self.active_id:
             self.queue.append(cid)
         await log_event("session", "guest_joined", actor=f"guest:{label}", target=code)
-        await self.promote()
+        if not view_only:
+            await self.promote()
         await self.broadcast_presence()
 
     async def remove_client(self, cid: str):
@@ -619,6 +639,11 @@ class Hub:
         await self._append_chat(author="Owner", role="owner", text=text, sender_id="owner")
 
     def client_status(self, cid: str) -> dict:
+        client = self.clients.get(cid)
+        # View-only or time-expired clients are permanent spectators — they
+        # never queue and never gain control, but stay connected to watch.
+        if client and (client.get("view_only") or client.get("expired")):
+            return {"status": "spectator", "position": -1, "remaining_seconds": 0}
         if cid == self.active_id:
             return {"status": "active", "position": 0, "remaining_seconds": self.active_remaining()}
         if cid in self.queue:
@@ -851,28 +876,33 @@ def code_public(doc: dict) -> dict:
         "used_seconds": used,
         "remaining_seconds": max(0, granted - used),
         "revoked": bool(doc.get("revoked", False)),
+        "view_only": bool(doc.get("view_only", False)),
         "created_at": doc.get("created_at"),
         "last_used_at": doc.get("last_used_at"),
     }
 
 @api_router.post("/codes")
 async def create_code(body: CodeCreate, user: dict = Depends(get_current_user)):
+    # View-only codes don't need any granted time — they never enter the queue.
+    if not body.view_only and body.minutes <= 0:
+        raise HTTPException(status_code=422, detail="Control codes need at least 1 minute.")
     code = gen_code()
     while await db.access_codes.find_one({"code": code}):
         code = gen_code()
     doc = {
         "code": code,
         "label": body.label.strip(),
-        "granted_seconds": body.minutes * 60,
+        "granted_seconds": (body.minutes * 60) if not body.view_only else 0,
         "used_seconds": 0,
         "revoked": False,
+        "view_only": body.view_only,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_used_at": None,
     }
     res = await db.access_codes.insert_one(doc)
     doc["_id"] = res.inserted_id
     await log_event("security", "code_created", actor=user["email"], target=code,
-                    detail={"minutes": body.minutes, "label": body.label.strip()})
+                    detail={"minutes": body.minutes, "label": body.label.strip(), "view_only": body.view_only})
     return code_public(doc)
 
 @api_router.get("/codes")
@@ -926,12 +956,14 @@ async def validate_code(code: str, request: Request):
     if not doc or doc.get("revoked"):
         await record_failure(ident)
         return {"valid": False}
+    view_only = bool(doc.get("view_only", False))
     remaining = max(0, int(doc.get("granted_seconds", 0) - doc.get("used_seconds", 0)))
-    if remaining <= 0:
+    # View-only codes are ALWAYS valid until revoked — they don't have a timer.
+    if not view_only and remaining <= 0:
         await record_failure(ident)
         return {"valid": False, "label": doc.get("label", ""), "remaining_seconds": 0}
     await clear_attempts(ident)
-    return {"valid": True, "label": doc.get("label", ""), "remaining_seconds": remaining}
+    return {"valid": True, "label": doc.get("label", ""), "remaining_seconds": remaining, "view_only": view_only}
 
 # ------------------------------------------------------------------
 # Safety settings (owner-set limits enforced server-side)
@@ -1124,9 +1156,12 @@ async def ws_host(ws: WebSocket):
 @app.websocket("/api/ws/control/{code}")
 async def ws_control(ws: WebSocket, code: str):
     code = code.upper()
-    remaining = await hub.code_remaining(code)
     doc = await db.access_codes.find_one({"code": code})
-    if not doc or doc.get("revoked") or remaining <= 0:
+    view_only = bool(doc.get("view_only", False)) if doc else False
+    remaining = await hub.code_remaining(code)
+    # Control codes: reject if expired/revoked. View-only codes: only reject on
+    # revoke — they don't have a time budget.
+    if not doc or doc.get("revoked") or (not view_only and remaining <= 0):
         await ws.accept()
         await ws.send_json({"type": "rejected", "reason": "invalid_or_expired"})
         await ws.close()
@@ -1136,7 +1171,7 @@ async def ws_control(ws: WebSocket, code: str):
     owner_label = doc.get("label")
     label = owner_label or code
     async with hub.lock:
-        await hub.add_client(cid, ws, code, label, auto_label=not owner_label)
+        await hub.add_client(cid, ws, code, label, auto_label=not owner_label, view_only=view_only)
         await hub.broadcast()
     # Seed the newly-joined guest with the current chat history so they don't
     # arrive to an empty pane while everyone else is mid-conversation.
@@ -1145,18 +1180,24 @@ async def ws_control(ws: WebSocket, code: str):
     try:
         while True:
             data = await ws.receive_json()
-            if data.get("type") == "command":
+            t = data.get("type")
+            # View-only + time-expired clients still receive state + chat, but
+            # any control/toy command is silently dropped. Presence & chat &
+            # typing still flow so they can watch and talk.
+            client = hub.clients.get(cid)
+            allow_control = bool(client) and not client.get("view_only") and not client.get("expired")
+            if t == "command" and allow_control:
                 async with hub.lock:
                     await hub.handle_command(cid, str(data.get("cmd", "")))
-            elif data.get("type") == "toy_command":
+            elif t == "toy_command" and allow_control:
                 async with hub.lock:
                     await hub.handle_toy_command(cid, str(data.get("cmd", "")))
-            elif data.get("type") == "chat":
+            elif t == "chat":
                 async with hub.lock:
                     hub.typing_at.pop(cid, None)
                     await hub.handle_guest_chat(cid, str(data.get("text", "")))
                 await hub.broadcast_presence()
-            elif data.get("type") == "typing":
+            elif t == "typing":
                 async with hub.lock:
                     await hub.mark_typing(cid)
     except WebSocketDisconnect:
