@@ -431,6 +431,8 @@ async def whip_publish(request: Request) -> Response:
     sdp = await _read_sdp(request)
     sdp = rewrite_incoming_sdp(sdp)
     logger.info("WHIP SDP offer from %s: %d bytes", ip, len(sdp))
+    _offer_cands = [ln for ln in sdp.splitlines() if ln.startswith("a=candidate:")]
+    logger.info("WHIP offer ICE candidates (%d):\n  %s", len(_offer_cands), "\n  ".join(_offer_cands) or "(none — OBS is trickle-mode)")
     async with hub.lock:
         # Only one publisher slot — close the previous one on takeover.
         if hub.publisher_pc is not None:
