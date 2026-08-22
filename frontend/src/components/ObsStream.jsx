@@ -14,6 +14,11 @@ export function ObsStream({ compact = false }) {
   const videoRef = useRef(null);
   const pcRef = useRef(null);
   const locationRef = useRef(null);
+  // Auto-reconnect state for the WHEP viewer. Attempts reset when we reach
+  // "connected"; each failure schedules a backoff retry (up to 15s) with a
+  // freshly-fetched ICE server list so the viewer survives TURN allocation
+  // expiry (600s) and transient network hiccups.
+  const reconnectRef = useRef({ attempt: 0, timer: null, unmounted: false });
   const [status, setStatus] = useState({ publisher_connected: false, viewer_count: 0, tracks: [] });
   const [state, setState] = useState("idle"); // idle | connecting | live | error | waiting
   const [iceState, setIceState] = useState("");
@@ -49,6 +54,31 @@ export function ObsStream({ compact = false }) {
       pcRef.current = null;
     }
     if (videoRef.current) videoRef.current.srcObject = null;
+  };
+
+  const scheduleReconnect = (reason) => {
+    const r = reconnectRef.current;
+    if (r.unmounted) return;
+    // Don't stack timers; the state change may fire twice (ICE + PC).
+    if (r.timer) return;
+    r.attempt = Math.min(r.attempt + 1, 6);
+    const delay = Math.min(15000, 800 * 2 ** (r.attempt - 1));
+    setState("waiting");
+    setError(`Stream link dropped (${reason}) — retrying in ${Math.round(delay / 1000)}s…`);
+    r.timer = setTimeout(async () => {
+      r.timer = null;
+      if (r.unmounted) return;
+      // Only reconnect if a publisher is still live upstream.
+      try {
+        const s = await fetch(`${API}/stream/status`).then((x) => x.json());
+        if (!s.publisher_connected) {
+          setState("idle");
+          setError("");
+          return;
+        }
+      } catch (_) { /* status check errors — retry regardless */ }
+      await connect();
+    }, delay);
   };
 
   const connect = async () => {
@@ -107,14 +137,18 @@ export function ObsStream({ compact = false }) {
       setIceState(pc.iceConnectionState);
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
         setState("live");
-      } else if (pc.iceConnectionState === "failed") {
-        setState("waiting");
-        setError("ICE could not reach the media server. If you're on cellular or a different network, the host may need to forward the WebRTC UDP ports (default 50000-50099).");
+        // Reset reconnect backoff on a healthy connection.
+        reconnectRef.current.attempt = 0;
+      } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+        scheduleReconnect("ICE " + pc.iceConnectionState);
       }
     };
     pc.onconnectionstatechange = () => {
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         setState((s) => (s === "live" ? "waiting" : s));
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          scheduleReconnect("PC " + pc.connectionState);
+        }
       }
     };
 
@@ -174,12 +208,19 @@ export function ObsStream({ compact = false }) {
       connect();
     }
     if (!status.publisher_connected && (state === "live" || state === "connecting")) {
+      // Publisher gone — cancel any pending retry and go quiet.
+      if (reconnectRef.current.timer) { clearTimeout(reconnectRef.current.timer); reconnectRef.current.timer = null; }
+      reconnectRef.current.attempt = 0;
       teardown();
       setState("idle");
     }
   }, [status.publisher_connected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => () => { teardown(); }, []);
+  useEffect(() => () => {
+    reconnectRef.current.unmounted = true;
+    if (reconnectRef.current.timer) { clearTimeout(reconnectRef.current.timer); reconnectRef.current.timer = null; }
+    teardown();
+  }, []);
 
   const toggleMute = () => {
     setMuted((m) => {

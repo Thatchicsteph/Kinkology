@@ -36,6 +36,7 @@ export default function GuestControl() {
   const [chatMsgs, setChatMsgs] = useState([]);
   const [presence, setPresence] = useState(null);
   const wsRef = useRef(null);
+  const wsRetryRef = useRef({ attempt: 0, timer: null, cancelled: false });
 
   useEffect(() => {
     let active = true;
@@ -45,14 +46,23 @@ export default function GuestControl() {
       setMeta(data);
       connectWs();
     }).catch(() => active && setPhase("invalid"));
-    return () => { active = false; if (wsRef.current) wsRef.current.close(); };
+    return () => {
+      active = false;
+      wsRetryRef.current.cancelled = true;
+      if (wsRetryRef.current.timer) { clearTimeout(wsRetryRef.current.timer); wsRetryRef.current.timer = null; }
+      if (wsRef.current) wsRef.current.close();
+    };
     // eslint-disable-next-line
   }, [code]);
 
   const connectWs = () => {
-    setPhase("connecting");
+    setPhase((p) => (p === "connecting" || p === "active" || p === "waiting" ? p : "connecting"));
     const ws = new WebSocket(`${WS_BASE}/api/ws/control/${code}`);
     wsRef.current = ws;
+    ws.onopen = () => {
+      // Reset retry backoff whenever the socket comes up cleanly.
+      wsRetryRef.current.attempt = 0;
+    };
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.type === "rejected") { setPhase("invalid"); return; }
@@ -70,7 +80,20 @@ export default function GuestControl() {
       if (msg.type === "chat_cleared") setChatMsgs([]);
       if (msg.type === "presence") setPresence(msg);
     };
-    ws.onclose = () => setPhase((p) => (p === "ended" || p === "invalid" ? p : "ended"));
+    ws.onclose = () => {
+      if (wsRetryRef.current.cancelled) return;
+      setPhase((p) => (p === "ended" || p === "invalid" ? p : "reconnecting"));
+      // Exponential backoff capped at 15s. Skips retry when the session ended
+      // legitimately (time_up / invalid code) — those states short-circuit above.
+      const state = wsRetryRef.current;
+      if (state.cancelled) return;
+      state.attempt = Math.min(state.attempt + 1, 6);
+      const delay = Math.min(15000, 1000 * 2 ** (state.attempt - 1));
+      if (state.timer) clearTimeout(state.timer);
+      state.timer = setTimeout(() => {
+        if (!wsRetryRef.current.cancelled) connectWs();
+      }, delay);
+    };
     ws.onerror = () => {};
   };
 
@@ -98,12 +121,14 @@ export default function GuestControl() {
     }
   };
 
-  if (phase === "checking" || phase === "connecting") {
+  if (phase === "checking" || phase === "connecting" || phase === "reconnecting") {
     return (
       <Shell code={code}>
         <div className="flex-1 flex flex-col items-center justify-center gap-4 text-[var(--kink-text-2)]">
           <Loader2 className="animate-spin text-[var(--kink-purple)]" size={32} />
-          <p className="font-mono-data text-sm">Connecting to the bridge…</p>
+          <p className="font-mono-data text-sm">
+            {phase === "reconnecting" ? "Connection dropped — reconnecting…" : "Connecting to the bridge…"}
+          </p>
         </div>
       </Shell>
     );
