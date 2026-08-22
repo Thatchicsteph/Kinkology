@@ -23,9 +23,10 @@ import secrets
 import time
 from typing import Awaitable, Callable, Dict, List, Optional
 
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer, RTCIceCandidate
 from aiortc.contrib.media import MediaRelay
 from aiortc.rtcrtpsender import RTCRtpSender
+from aiortc.sdp import candidate_from_sdp
 from fastapi import APIRouter, HTTPException, Request, Response
 
 import os
@@ -505,10 +506,44 @@ async def whip_probe() -> Response:
 
 
 @router.patch("/whip/{sid}")
-async def whip_trickle(sid: str) -> Response:
-    """Trickle-ICE PATCH from WHIP clients. aiortc gathers ICE non-trickle, so
-    all candidates are already in the answer — we accept and no-op so newer
-    clients (OBS 30.2+) don't error out when they try to trickle."""
+async def whip_trickle(sid: str, request: Request) -> Response:
+    """Trickle-ICE PATCH from WHIP clients. OBS 30.2+ sends its offer with
+    no ICE candidates and trickles them here as an SDP fragment. Without
+    processing these the backend never learns OBS's srflx/relay candidates
+    and every ICE check pair fails."""
+    body = (await request.body()).decode("utf-8", errors="ignore")
+    if not body.strip():
+        return Response(status_code=204)
+
+    async with hub.lock:
+        if hub.publisher_id != sid or hub.publisher_pc is None:
+            raise HTTPException(status_code=404, detail="Unknown publisher session")
+        pc = hub.publisher_pc
+
+    current_mid: Optional[str] = None
+    media_index = -1
+    added = 0
+    for raw in body.splitlines():
+        line = raw.strip()
+        if line.startswith("m="):
+            media_index += 1
+            current_mid = None
+        elif line.startswith("a=mid:"):
+            current_mid = line[6:].strip()
+        elif line.startswith("a=end-of-candidates"):
+            continue
+        elif line.startswith("a=candidate:"):
+            try:
+                cand = candidate_from_sdp(line[2:])  # strip leading "a="
+                cand.sdpMid = current_mid
+                if media_index >= 0:
+                    cand.sdpMLineIndex = media_index
+                await pc.addIceCandidate(cand)
+                added += 1
+            except Exception as e:  # noqa: BLE001
+                logger.warning("WHIP %s trickle candidate rejected (%s): %s", sid, e, line)
+    if added:
+        logger.info("WHIP %s trickled %d ICE candidate(s)", sid, added)
     return Response(status_code=204)
 
 
@@ -594,7 +629,7 @@ async def stream_options() -> Response:
     resp = Response(
         status_code=204,
         headers={
-            "Access-Control-Allow-Methods": "POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Methods": "POST, PATCH, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
             "Access-Control-Expose-Headers": "Location, Link",
         },
