@@ -129,7 +129,11 @@ class TestNewPc:
         src = open("/app/backend/stream.py").read()
         assert "RTCPeerConnection()" not in src, \
             "a bare RTCPeerConnection() (no STUN config) still exists in stream.py"
-        assert src.count("_new_pc()") >= 3
+        # WHIP/WHEP handlers now use the async variant `_new_pc_with_extra_ice()`
+        # (injects Cloudflare TURN); both variants configure ICE servers.
+        assert src.count("_new_pc()") + src.count("_new_pc_with_extra_ice()") >= 3
+        assert "await _new_pc_with_extra_ice()" in src, \
+            "WHIP/WHEP handlers must build the PC via _new_pc_with_extra_ice()"
 
 
 # --------------------------------------------------------- live WHEP flow

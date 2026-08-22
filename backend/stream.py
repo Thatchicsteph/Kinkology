@@ -91,6 +91,30 @@ def _new_pc() -> RTCPeerConnection:
     """RTCPeerConnection with STUN/TURN pre-configured so ICE can traverse NAT."""
     return RTCPeerConnection(configuration=RTCConfiguration(iceServers=_ice_servers()))
 
+
+async def _new_pc_with_extra_ice() -> RTCPeerConnection:
+    """Same as _new_pc() but also injects any dynamically-configured TURN
+    servers (currently: Cloudflare Calls). Awaits an async provider so a
+    fresh per-session TURN credential is minted each call. Falls back to
+    the static config if the provider is missing or errors."""
+    servers = _ice_servers()
+    if _get_extra_ice_servers is not None:
+        try:
+            extra = await _get_extra_ice_servers() or []
+            for entry in extra:
+                # entry is a dict from Cloudflare with `urls`, `username`, `credential`.
+                urls = entry.get("urls")
+                if not urls:
+                    continue
+                servers.append(RTCIceServer(
+                    urls=urls if isinstance(urls, list) else [urls],
+                    username=entry.get("username") or None,
+                    credential=entry.get("credential") or None,
+                ))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("extra ICE provider failed: %s — using static ICE", e)
+    return RTCPeerConnection(configuration=RTCConfiguration(iceServers=servers))
+
 # Small TTL cache so we don't resolve the same Host header on every WHEP call.
 # Value is (ip, expires_at); positive TTL 60s, negative TTL 5s so a transient
 # resolver blip on our real deployment FQDN doesn't disable the IPv4 rewrite
@@ -203,11 +227,18 @@ _relay = MediaRelay()
 # Server.py wires this on startup so we can check the persisted publish token
 # without importing the mongo client (avoids a circular import).
 _get_publish_token: Optional[Callable[[], Awaitable[str]]] = None
+# Same story for extra ICE servers (Cloudflare TURN configured via admin UI).
+_get_extra_ice_servers: Optional[Callable[[], Awaitable[list]]] = None
 
 
 def set_publish_token_provider(provider: Callable[[], Awaitable[str]]) -> None:
     global _get_publish_token
     _get_publish_token = provider
+
+
+def set_extra_ice_provider(provider: Callable[[], Awaitable[list]]) -> None:
+    global _get_extra_ice_servers
+    _get_extra_ice_servers = provider
 
 
 async def _current_publish_token() -> str:
@@ -334,7 +365,7 @@ async def whip_publish(request: Request) -> Response:
         if hub.publisher_pc is not None:
             await hub.close_publisher()
 
-        pc = _new_pc()
+        pc = await _new_pc_with_extra_ice()
         sid = secrets.token_hex(8)
         hub.publisher_pc = pc
         hub.publisher_id = sid
@@ -428,7 +459,7 @@ async def whep_view(request: Request) -> Response:
     sdp = await _read_sdp(request)
     sdp = rewrite_incoming_sdp(sdp)
 
-    pc = _new_pc()
+    pc = await _new_pc_with_extra_ice()
     sid = secrets.token_hex(8)
     hub.viewers[sid] = pc
 

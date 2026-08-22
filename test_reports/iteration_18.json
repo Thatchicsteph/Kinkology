@@ -1,0 +1,35 @@
+{
+  "summary": "Backend-only verification of the 'backend aiortc PC now uses Cloudflare TURN' fix. Wrote 6 in-process pytest unit tests for stream._new_pc_with_extra_ice() (introspecting aiortc's private _RTCPeerConnection__configuration) and a new E2E script that runs a hit-counting mock Cloudflare TURN endpoint (port 9739 + CF_TURN_ENDPOINT in backend/.env + supervisor restart, cleaned up afterwards), configures CF via PUT /api/stream/turn/cloudflare, then publishes via /api/whip and subscribes via /api/whep with aiortc. Results: mock hit once during /api/whip (backend PC), once for GET /api/stream/ice-servers, and once more during /api/whep => 3 mints, all within 10s of the WHIP POST. Provider-raises and provider-returns-empty paths both fall back to static STUN identically to _new_pc(). All 5 legacy suites (test_whip_whep, test_whip_auth, test_chat_and_lock, test_toy_relay, test_cloudflare_turn) exit 0, and 41/42 existing stream pytest tests passed (the one failure was a stale assertion in the test suite itself, fixed).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/whip, POST /api/whep", "issue": "PERF/RESILIENCE only (not a failure observed in tests): with Cloudflare configured, every WHIP/WHEP request now makes a synchronous outbound POST to Cloudflare (httpx timeout=8s in cloudflare_turn.mint_ice_servers). In /api/whip this await happens while holding hub.lock, so a slow/unreachable Cloudflare API can stall publish/takeover for up to 8s and serialize concurrent viewers. Consider a short-TTL cache of minted creds (they are valid 1h) and/or a tighter timeout (~2-3s)."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_backend_pc_extra_ice.py",
+    "/app/tests/test_backend_pc_cf_turn.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: cache minted Cloudflare TURN creds (1h TTL) instead of minting on every WHIP/WHEP PC creation, and move the mint outside hub.lock in the WHIP handler."
+  ],
+  "critical_code_review_comments": [
+    "stream.py: module-level `_get_extra_ice_servers` is declared at line 231, i.e. AFTER _new_pc_with_extra_ice() (line 95) references it. It works (global resolved at call time) but is fragile/confusing — move the declaration above the function.",
+    "cloudflare_turn.mint_ice_servers uses timeout=8; on the WHIP path this runs under hub.lock. A minted credential is valid 1h, so per-PC minting is wasteful — cache it.",
+    "stream.py is 530 lines — still under the 700-line threshold, no split needed yet."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_backend_pc_extra_ice.py (new)",
+    "/app/tests/test_backend_pc_cf_turn.py (new)",
+    "/app/backend/tests/test_stream_ice_stun.py (fixed stale assertion: test_call_sites_use_new_pc counted only '_new_pc()' occurrences and failed after WHIP/WHEP switched to '_new_pc_with_extra_ice()'; now counts both variants and asserts the async variant is used)"
+  ],
+  "success_rate": {"backend": "100% (6/6 new unit tests, 1/1 new E2E, 5/5 legacy scripts, 42/42 stream pytest after test-code fix)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Temporary Cloudflare TURN config (key_id abc123def456ghi789 / mock token) saved and deleted within the E2E test; CF_TURN_ENDPOINT appended to /app/backend/.env and restored from backup (verified 0 occurrences remain). No other data created.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "New reusable assets: /app/tests/test_backend_pc_cf_turn.py (mock CF endpoint that COUNTS hits — use it to assert backend-side TURN minting per PC) and /app/backend/tests/test_backend_pc_extra_ice.py (introspects pc._RTCPeerConnection__configuration.iceServers). Both restart the backend via supervisor; run them serially, not with the other suites in parallel. Verified: /api/stream/ice-servers is public and unchanged; WHIP/WHEP happy path with no CF configured is unaffected.",
+  "rca_of_the_issue": "Original bug: backend PCs were built by the sync _new_pc() which only read env STUN/TURN, so the server side never had the Cloudflare relay and ICE failed for carrier-NAT viewers. The fix (async _new_pc_with_extra_ice() + set_extra_ice_provider wired to cloudflare_turn.get_ice_servers_for_viewer) is confirmed working: the mock Cloudflare endpoint is hit once per backend PC creation (WHIP and WHEP) with the CF TURN entry appended to the static STUN list, and failures/empty results degrade to static ICE without raising."
+}

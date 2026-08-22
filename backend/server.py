@@ -26,7 +26,7 @@ import csv
 import json
 from io import BytesIO, StringIO
 
-from stream import router as stream_router, shutdown as stream_shutdown, set_publish_token_provider, _log_ice_config
+from stream import router as stream_router, shutdown as stream_shutdown, set_publish_token_provider, set_extra_ice_provider, _log_ice_config
 import stream_patch
 import cloudflare_turn
 
@@ -1250,6 +1250,17 @@ async def _get_stream_publish_token() -> str:
     return (doc.get("stream_token") or "").strip()
 
 set_publish_token_provider(_get_stream_publish_token)
+
+
+# Give the WHIP/WHEP path a way to pull fresh Cloudflare TURN credentials
+# for the aiortc PeerConnection on the backend side. Without this the browser
+# has TURN but the server-side PC only has STUN, and ICE never completes for
+# mobile viewers behind carrier NAT.
+async def _get_cloudflare_ice_servers() -> list:
+    return await cloudflare_turn.get_ice_servers_for_viewer(db, static=[])
+
+
+set_extra_ice_provider(_get_cloudflare_ice_servers)
 
 
 class StreamTokenInput(BaseModel):
