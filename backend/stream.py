@@ -258,6 +258,62 @@ def _extract_bearer(request: Request) -> str:
     return (request.query_params.get("token") or request.query_params.get("auth") or "").strip()
 
 
+async def _current_extra_ice_servers() -> list:
+    """Fetch dynamic (Cloudflare) ICE-server dicts for advertising to the client.
+    Returns a list of {"urls": [...], "username": "...", "credential": "..."}.
+    """
+    if _get_extra_ice_servers is None:
+        return []
+    try:
+        return (await _get_extra_ice_servers()) or []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _build_ice_link_headers(extra: list) -> str:
+    """Build RFC 8840 `Link:` header value advertising ICE servers to WHIP clients.
+    Multiple ICE servers are comma-separated as one Link header value; each server
+    format: `<url>; rel="ice-server"; username="..."; credential="..."; credential-type="password"`.
+    Includes static STUN plus any dynamic (Cloudflare) TURN/STUN URLs.
+
+    Without these headers OBS gathers only its private LAN host candidates and
+    can never connect through the backend's TURN relay.
+    """
+    entries: List[str] = []
+
+    def _add(url: str, username: str = "", credential: str = "") -> None:
+        # Escape any embedded quotes/commas per RFC-8840 examples.
+        safe_u = username.replace('"', '\\"') if username else ""
+        safe_c = credential.replace('"', '\\"') if credential else ""
+        parts = [f'<{url}>', 'rel="ice-server"']
+        if username or credential:
+            parts.append(f'username="{safe_u}"')
+            parts.append(f'credential="{safe_c}"')
+            parts.append('credential-type="password"')
+        entries.append("; ".join(parts))
+
+    # Static STUN — same defaults as _ice_servers().
+    stun_env = os.environ.get(
+        "STREAM_STUN_SERVERS",
+        "stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478",
+    )
+    for u in (s.strip() for s in stun_env.split(",")):
+        if u:
+            _add(u)
+
+    # Dynamic (Cloudflare) TURN — one Link entry per URL sharing the credential.
+    for srv in extra:
+        urls = srv.get("urls") if isinstance(srv, dict) else None
+        if not urls:
+            continue
+        username = srv.get("username") or ""
+        credential = srv.get("credential") or ""
+        for u in (urls if isinstance(urls, list) else [urls]):
+            _add(u, username, credential)
+
+    return ", ".join(entries)
+
+
 class StreamHub:
     def __init__(self) -> None:
         self.publisher_pc: Optional[RTCPeerConnection] = None
@@ -415,12 +471,18 @@ async def whip_publish(request: Request) -> Response:
     logger.info("WHIP publisher %s answer SDP candidates (%d):\n  %s", sid, len(_cands), "\n  ".join(_cands) or "(none)")
     logger.info("WHIP publisher %s ready — Location=%s", sid, location)
 
+    # Advertise ICE servers back to OBS via RFC 8840 Link headers. Without this,
+    # OBS libwebrtc only gathers its own LAN host candidates and can never reach
+    # the backend's TURN relay candidate.
+    link_header = _build_ice_link_headers(await _current_extra_ice_servers())
+
     return Response(
         content=answer_sdp,
         status_code=201,
         media_type="application/sdp",
         headers={
             "Location": location,
+            "Link": link_header,
             "Access-Control-Expose-Headers": "Location, Link",
         },
     )
@@ -490,12 +552,14 @@ async def whep_view(request: Request) -> Response:
 
     base = str(request.base_url).rstrip("/")
     answer_sdp = rewrite_answer_candidates(pc.localDescription.sdp, await _resolve_viewer_host(request))
+    link_header = _build_ice_link_headers(await _current_extra_ice_servers())
     return Response(
         content=answer_sdp,
         status_code=201,
         media_type="application/sdp",
         headers={
             "Location": f"{base}/api/whep/{sid}",
+            "Link": link_header,
             "Access-Control-Expose-Headers": "Location, Link",
         },
     )
