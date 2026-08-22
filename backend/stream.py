@@ -270,10 +270,12 @@ async def _current_extra_ice_servers() -> list:
         return []
 
 
-def _build_ice_link_headers(extra: list) -> str:
-    """Build RFC 8840 `Link:` header value advertising ICE servers to WHIP clients.
-    Multiple ICE servers are comma-separated as one Link header value; each server
-    format: `<url>; rel="ice-server"; username="..."; credential="..."; credential-type="password"`.
+def _build_ice_link_headers(extra: list) -> List[str]:
+    """Build a list of RFC 8840 `Link:` header VALUES advertising ICE servers
+    to WHIP clients. Per the WHIP draft §4.4.4 each ICE server must be its own
+    separate `Link:` header field (NOT comma-joined) — OBS's libwebrtc parser
+    rejects comma-separated Link values.
+
     Includes static STUN plus any dynamic (Cloudflare) TURN/STUN URLs.
 
     Without these headers OBS gathers only its private LAN host candidates and
@@ -282,7 +284,7 @@ def _build_ice_link_headers(extra: list) -> str:
     entries: List[str] = []
 
     def _add(url: str, username: str = "", credential: str = "") -> None:
-        # Escape any embedded quotes/commas per RFC-8840 examples.
+        # Escape any embedded quotes per RFC 8288.
         safe_u = username.replace('"', '\\"') if username else ""
         safe_c = credential.replace('"', '\\"') if credential else ""
         parts = [f'<{url}>', 'rel="ice-server"']
@@ -311,7 +313,7 @@ def _build_ice_link_headers(extra: list) -> str:
         for u in (urls if isinstance(urls, list) else [urls]):
             _add(u, username, credential)
 
-    return ", ".join(entries)
+    return entries
 
 
 class StreamHub:
@@ -473,19 +475,22 @@ async def whip_publish(request: Request) -> Response:
 
     # Advertise ICE servers back to OBS via RFC 8840 Link headers. Without this,
     # OBS libwebrtc only gathers its own LAN host candidates and can never reach
-    # the backend's TURN relay candidate.
-    link_header = _build_ice_link_headers(await _current_extra_ice_servers())
+    # the backend's TURN relay candidate. Per WHIP draft §4.4.4 each server must
+    # be its own Link header — OBS rejects comma-joined values.
+    link_values = _build_ice_link_headers(await _current_extra_ice_servers())
 
-    return Response(
+    resp = Response(
         content=answer_sdp,
         status_code=201,
         media_type="application/sdp",
         headers={
             "Location": location,
-            "Link": link_header,
             "Access-Control-Expose-Headers": "Location, Link",
         },
     )
+    for v in link_values:
+        resp.raw_headers.append((b"link", v.encode("latin-1")))
+    return resp
 
 
 @router.get("/whip")
@@ -552,17 +557,19 @@ async def whep_view(request: Request) -> Response:
 
     base = str(request.base_url).rstrip("/")
     answer_sdp = rewrite_answer_candidates(pc.localDescription.sdp, await _resolve_viewer_host(request))
-    link_header = _build_ice_link_headers(await _current_extra_ice_servers())
-    return Response(
+    link_values = _build_ice_link_headers(await _current_extra_ice_servers())
+    resp = Response(
         content=answer_sdp,
         status_code=201,
         media_type="application/sdp",
         headers={
             "Location": f"{base}/api/whep/{sid}",
-            "Link": link_header,
             "Access-Control-Expose-Headers": "Location, Link",
         },
     )
+    for v in link_values:
+        resp.raw_headers.append((b"link", v.encode("latin-1")))
+    return resp
 
 
 @router.patch("/whep/{sid}")
