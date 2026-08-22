@@ -57,12 +57,23 @@ export function ObsStream({ compact = false }) {
     setNeedsTap(false);
     setIceState("");
     setState("connecting");
-    // Cloudflare + Google STUN as belt-and-braces so at least one is reachable
-    // from carrier-NAT'd mobile networks. Backend also has its own STUN config.
+    // Ask the backend for a fresh ICE server config (public STUN + Cloudflare
+    // TURN if the owner has enabled it). Falls back to a static STUN pair so
+    // the connect flow keeps working even if the endpoint is unreachable.
+    let iceServers = [
+      { urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
+    ];
+    try {
+      const r = await fetch(`${API}/stream/ice-servers`);
+      if (r.ok) {
+        const j = await r.json();
+        if (Array.isArray(j.iceServers) && j.iceServers.length) {
+          iceServers = j.iceServers;
+        }
+      }
+    } catch (_) { /* keep static fallback */ }
     const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
-      ],
+      iceServers,
       bundlePolicy: "max-bundle",
     });
     pcRef.current = pc;

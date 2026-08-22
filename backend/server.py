@@ -28,6 +28,7 @@ from io import BytesIO, StringIO
 
 from stream import router as stream_router, shutdown as stream_shutdown, set_publish_token_provider, _log_ice_config
 import stream_patch
+import cloudflare_turn
 
 # Install aioice NAT/Docker patch BEFORE any RTCPeerConnection is created.
 stream_patch.apply()
@@ -1281,6 +1282,57 @@ async def clear_stream_token(user: dict = Depends(get_current_user)):
 
 
 api_router.include_router(stream_router)
+
+
+# ------------------------------------------------------------------
+# Cloudflare Calls TURN — one-click TURN for mobile viewers on
+# symmetric NAT / CGNAT. Owner pastes their TURN Key ID + API Token in
+# the admin UI; backend Fernet-encrypts the token in Mongo and mints
+# fresh, short-lived ICE credentials per viewer session.
+# ------------------------------------------------------------------
+class CloudflareTurnInput(BaseModel):
+    key_id: str = Field(min_length=1, max_length=200)
+    token: str = Field(min_length=1, max_length=2000)
+
+
+@api_router.get("/stream/turn/cloudflare")
+async def get_cloudflare_turn(user: dict = Depends(get_current_user)):
+    return await cloudflare_turn.get_status(db)
+
+
+@api_router.put("/stream/turn/cloudflare")
+async def put_cloudflare_turn(body: CloudflareTurnInput, user: dict = Depends(get_current_user)):
+    ok = await cloudflare_turn.validate_credentials(body.key_id.strip(), body.token.strip())
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Cloudflare rejected the credentials. Double-check the TURN Key ID and API Token in dash.cloudflare.com → Realtime → TURN.",
+        )
+    await cloudflare_turn.save_config(db, body.key_id, body.token)
+    await log_event("security", "cloudflare_turn_configured", actor=user["email"])
+    return {"ok": True, **await cloudflare_turn.get_status(db)}
+
+
+@api_router.delete("/stream/turn/cloudflare")
+async def delete_cloudflare_turn(user: dict = Depends(get_current_user)):
+    await cloudflare_turn.delete_config(db)
+    await log_event("security", "cloudflare_turn_removed", actor=user["email"])
+    return {"ok": True, "configured": False}
+
+
+@api_router.get("/stream/ice-servers")
+async def get_ice_servers():
+    """Public endpoint: returns a fresh set of ICE servers the browser should
+    plug into `new RTCPeerConnection({iceServers:[...]})` before starting the
+    WHEP handshake. Always includes public STUN; adds Cloudflare TURN if the
+    owner configured it."""
+    static = [
+        {"urls": ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"]},
+    ]
+    servers = await cloudflare_turn.get_ice_servers_for_viewer(db, static)
+    return {"iceServers": servers}
+
+
 app.include_router(api_router)
 
 # CORS: default to same-origin only (the documented Caddy/Docker setup is single-origin).

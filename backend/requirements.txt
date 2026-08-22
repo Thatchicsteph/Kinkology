@@ -37,3 +37,5 @@ google-crc32c==1.8.0
 ifaddr==0.2.0
 pyee==13.0.1
 pylibsrtp==1.0.0
+cryptography==50.0.0
+httpx==0.28.1

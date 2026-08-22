@@ -30,6 +30,11 @@ services:
       STREAM_TURN_URL: ${STREAM_TURN_URL:-}
       STREAM_TURN_USERNAME: ${STREAM_TURN_USERNAME:-}
       STREAM_TURN_PASSWORD: ${STREAM_TURN_PASSWORD:-}
+      # Encryption key for storing Cloudflare TURN token at rest. Generate
+      # once with: python -c "from cryptography.fernet import Fernet;
+      # print(Fernet.generate_key().decode())". Leaving it blank means saved
+      # Cloudflare credentials don't survive a restart.
+      TURN_CREDENTIAL_ENCRYPTION_KEY: ${TURN_CREDENTIAL_ENCRYPTION_KEY:-}
       # 127.0.0.1 works when OBS runs on the same Mac as Docker. For LAN OBS,
       # set this to the Mac's LAN IP (e.g., 192.168.1.42) in .env. For remote
       # OBS behind a public domain, set it to the public IP / DDNS host.

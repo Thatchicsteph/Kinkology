@@ -12,6 +12,7 @@ import { RecentActivity } from "@/components/RecentActivity";
 import { HeartRateSync } from "@/components/HeartRateSync";
 import { ToysPanel } from "@/components/ToysPanel";
 import { ObsStream, ObsStreamSetup } from "@/components/ObsStream";
+import { CloudflareTurnCard } from "@/components/CloudflareTurnCard";
 import { ChatPanel } from "@/components/ChatPanel";
 import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
@@ -304,6 +305,7 @@ export default function AdminDashboard() {
         {/* Access codes */}
         <section className="space-y-6">
           <ObsStreamSetup localUrl={urls.local_url} />
+          <CloudflareTurnCard />
           <div className="hud-panel p-5 sm:p-6" data-testid="overlay-link-card">
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-2">
               <Activity size={18} className="text-[var(--kink-purple)]" /> Live Overlay
