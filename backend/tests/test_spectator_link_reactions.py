@@ -215,3 +215,30 @@ class TestReactions:
         got = asyncio.run(run())
         assert len(got) >= 1, "spectator (view-only) reaction did not reach owner"
         assert got[0]["emoji"] == "💜"
+
+
+    def test_per_emoji_rate_limit(self, admin_token, control_code):
+        """Switching emojis back-to-back should get through both — only same
+        emoji within 400ms is throttled.
+        """
+        async def run():
+            owner = await _owner_ws(admin_token)
+            guest = await websockets.connect(f"{WS_BASE}/api/ws/control/{control_code}")
+            try:
+                await _drain(owner, 1.0)
+                await _drain(guest, 1.0)
+                # 🔥 then 💦 in the same tick — both should pass because
+                # rate-limit key includes the emoji.
+                await guest.send(json.dumps({"type": "reaction", "emoji": "🔥"}))
+                await guest.send(json.dumps({"type": "reaction", "emoji": "💦"}))
+                # …but a second 🔥 within 400ms should be dropped.
+                await guest.send(json.dumps({"type": "reaction", "emoji": "🔥"}))
+                return await _collect_reactions(owner, 2.0)
+            finally:
+                await owner.close()
+                await guest.close()
+
+        got = asyncio.run(run())
+        emojis = [r["emoji"] for r in got]
+        assert emojis.count("🔥") == 1, f"expected one 🔥, got {emojis}"
+        assert emojis.count("💦") == 1, f"expected one 💦, got {emojis}"

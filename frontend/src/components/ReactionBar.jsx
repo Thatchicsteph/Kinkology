@@ -1,22 +1,25 @@
 import React, { useRef } from "react";
 
 /**
- * Row of one-tap reaction emoji buttons. Rate-limits the caller to 400ms
- * per emoji to align with the backend's per-sender guard, and gives
- * micro visual feedback (scale press) on tap.
+ * Row of one-tap reaction emoji buttons.
+ *
+ * Per-emoji 400ms client throttle — switching from 🔥 to 💦 back-to-back
+ * no longer swallows the second click. Aligns with the backend's per-sender
+ * rate limit but doesn't punish users for varying their reactions.
  *
  * Server whitelist: 🔥 💦 😩 👏 😈 💜 🍑 ❤️
  */
 const REACTIONS = ["🔥", "💦", "😩", "👏", "😈", "💜"];
 
 export function ReactionBar({ onReact, disabled = false, className = "" }) {
-  const lastRef = useRef(0);
+  const lastRef = useRef(new Map());
 
   const handle = (emoji) => {
     if (disabled) return;
     const now = Date.now();
-    if (now - lastRef.current < 400) return;
-    lastRef.current = now;
+    const last = lastRef.current.get(emoji) || 0;
+    if (now - last < 400) return;
+    lastRef.current.set(emoji, now);
     try { onReact(emoji); } catch (_) {}
   };
 

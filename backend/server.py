@@ -273,6 +273,12 @@ class Hub:
         self.active_id: Optional[str] = None
         self.active_start: Optional[float] = None
         self.active_remaining_start: int = 0
+        # Seconds of the current active turn that have already been written
+        # back to the code's used_seconds in Mongo. tick() flushes the delta
+        # every FLUSH_INTERVAL_S so a mid-turn backend restart preserves the
+        # guest's remaining time (they auto-reconnect and pick up where they
+        # left off, minus at most one flush interval).
+        self.active_flushed: int = 0
         self.device_state: str = ""
         self.limits: dict = {"min_depth": 0, "max_speed": 100, "max_depth": 100}
         self.hr_cutoff: int = 0
@@ -318,17 +324,19 @@ class Hub:
 
     async def broadcast_reaction(self, cid: Optional[str], emoji: str) -> None:
         """Relay a single reaction emoji to everyone (owner + all guests).
-        `cid` is None when the owner reacts. Rate-limited per-sender using
-        the same `chat_last_sent` map so both channels share one bucket.
+        `cid` is None when the owner reacts. Rate-limited per-sender AND
+        per-emoji so a viewer switching 🔥→💦 back-to-back gets both, but
+        holding 🔥 down at 30fps still gets throttled.
         """
         if emoji not in self.REACTION_WHITELIST:
             return
         key = cid or "owner"
+        rl_key = f"react:{key}:{emoji}"
         now = time.monotonic()
-        last = self.chat_last_sent.get(f"react:{key}", 0.0)
+        last = self.chat_last_sent.get(rl_key, 0.0)
         if now - last < self.REACTION_MIN_GAP_S:
             return
-        self.chat_last_sent[f"react:{key}"] = now
+        self.chat_last_sent[rl_key] = now
         if cid:
             client = self.clients.get(cid)
             label = ("Guest" if client and client.get("auto_label") else (client["label"] if client else "Guest"))
@@ -516,6 +524,7 @@ class Hub:
             self.active_id = cid
             self.active_start = time.monotonic()
             self.active_remaining_start = remaining
+            self.active_flushed = 0
             self.reset_telemetry()
             await log_event("session", "guest_active", actor=f"guest:{client['label']}",
                             target=client["code"], detail={"remaining_seconds": remaining})
@@ -528,10 +537,13 @@ class Hub:
         client = self.clients.get(cid)
         elapsed = int(time.monotonic() - (self.active_start or time.monotonic()))
         consumed = min(elapsed, self.active_remaining_start)
+        # Only write the seconds we haven't already flushed via the periodic
+        # ticker — otherwise we double-count and the guest loses time.
+        delta = max(0, consumed - self.active_flushed)
         if client:
             await db.access_codes.update_one(
                 {"code": client["code"]},
-                {"$inc": {"used_seconds": consumed},
+                {"$inc": {"used_seconds": delta},
                  "$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}},
             )
             # When the guest's time runs out, we DON'T disconnect them anymore
@@ -551,6 +563,7 @@ class Hub:
         self.active_id = None
         self.active_start = None
         self.active_remaining_start = 0
+        self.active_flushed = 0
         self.reset_telemetry()
         await self.push_telemetry()
 
@@ -717,11 +730,47 @@ class Hub:
             payload = {"type": "state", **guest_base, "you": self.client_status(cid), "label": c["label"]}
             await self._send(c["ws"], payload)
 
+    # Flush active-turn elapsed time to Mongo this often. A backend restart
+    # (or crash) loses at most this many seconds of the guest's remaining
+    # time — they auto-reconnect after and pick up the rest.
+    FLUSH_INTERVAL_S = 5
+
+    async def _flush_active_used_seconds(self) -> None:
+        """Persist unwritten elapsed seconds of the current turn.
+        Called every FLUSH_INTERVAL_S from tick(); reads state without the
+        Hub lock (already held by the caller).
+        """
+        if self.active_id is None or self.active_start is None:
+            return
+        client = self.clients.get(self.active_id)
+        if client is None:
+            return
+        elapsed = int(time.monotonic() - self.active_start)
+        consumed = min(elapsed, self.active_remaining_start)
+        delta = consumed - self.active_flushed
+        if delta <= 0:
+            return
+        try:
+            await db.access_codes.update_one(
+                {"code": client["code"]},
+                {"$inc": {"used_seconds": delta},
+                 "$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            self.active_flushed = consumed
+        except Exception as e:
+            logger.error(f"used_seconds flush failed: {e}")
+
     async def tick(self):
         async with self.lock:
             if self.active_id is not None and self.active_remaining() <= 0:
                 await self.end_active("time_up")
                 await self.promote()
+            # Persist the running clock so a restart doesn't hand the guest
+            # back all their spent time.
+            if self.active_id is not None and self.active_start is not None:
+                elapsed = int(time.monotonic() - self.active_start)
+                if elapsed - self.active_flushed >= self.FLUSH_INTERVAL_S:
+                    await self._flush_active_used_seconds()
             await self.broadcast()
             await self.push_telemetry()
 
