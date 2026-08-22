@@ -16,6 +16,8 @@ export function ObsStream({ compact = false }) {
   const locationRef = useRef(null);
   const [status, setStatus] = useState({ publisher_connected: false, viewer_count: 0, tracks: [] });
   const [state, setState] = useState("idle"); // idle | connecting | live | error | waiting
+  const [iceState, setIceState] = useState("");
+  const [needsTap, setNeedsTap] = useState(false); // iOS Safari autoplay-blocked
   const [muted, setMuted] = useState(true);
   const [error, setError] = useState("");
 
@@ -52,9 +54,16 @@ export function ObsStream({ compact = false }) {
   const connect = async () => {
     await teardown();
     setError("");
+    setNeedsTap(false);
+    setIceState("");
     setState("connecting");
+    // Cloudflare + Google STUN as belt-and-braces so at least one is reachable
+    // from carrier-NAT'd mobile networks. Backend also has its own STUN config.
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      iceServers: [
+        { urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
+      ],
+      bundlePolicy: "max-bundle",
     });
     pcRef.current = pc;
 
@@ -68,22 +77,33 @@ export function ObsStream({ compact = false }) {
       if (el && el.srcObject !== stream) {
         el.srcObject = stream;
         // iOS Safari refuses to autoplay a media element that receives its
-        // srcObject after mount unless we explicitly kick .play(). It also
-        // requires muted=true at play time — enforce it directly on the DOM
-        // node in case the React prop hasn't flushed yet.
+        // srcObject after mount unless we explicitly kick .play() AND it's
+        // muted. Enforce both on the DOM node.
         el.muted = true;
         el.setAttribute("playsinline", "");
         el.playsInline = true;
         const p = el.play();
         if (p && typeof p.catch === "function") {
-          p.catch(() => {/* autoplay blocked, viewer needs to tap */});
+          p.catch(() => {
+            // Autoplay blocked — most commonly iOS Safari. Show a Tap-to-Play
+            // overlay so the next user gesture starts playback.
+            setNeedsTap(true);
+          });
         }
       }
-      setState("live");
+    };
+    pc.oniceconnectionstatechange = () => {
+      setIceState(pc.iceConnectionState);
+      if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        setState("live");
+      } else if (pc.iceConnectionState === "failed") {
+        setState("waiting");
+        setError("ICE could not reach the media server. If you're on cellular or a different network, the host may need to forward the WebRTC UDP ports (default 50000-50099).");
+      }
     };
     pc.onconnectionstatechange = () => {
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
-        setState("waiting");
+        setState((s) => (s === "live" ? "waiting" : s));
       }
     };
 
@@ -110,6 +130,14 @@ export function ObsStream({ compact = false }) {
       const loc = res.headers.get("Location");
       if (loc) locationRef.current = loc.startsWith("http") ? loc : `${window.location.origin}${loc}`;
       await pc.setRemoteDescription({ type: "answer", sdp: answer });
+      // Fallback: if ICE hasn't connected within 12s, surface the failure so
+      // the user sees a useful message instead of an infinite "buffering".
+      setTimeout(() => {
+        if (pcRef.current === pc && pc.iceConnectionState !== "connected" && pc.iceConnectionState !== "completed") {
+          setState("waiting");
+          setError((prev) => prev || `ICE timed out in state \"${pc.iceConnectionState}\". If you're on cellular, the host must open UDP 50000-50099.`);
+        }
+      }, 12000);
     } catch (e) {
       setState("error");
       setError(e.message || "Could not connect to stream.");
@@ -145,14 +173,25 @@ export function ObsStream({ compact = false }) {
     else if (el.webkitEnterFullscreen) el.webkitEnterFullscreen();
   };
 
+  const kickPlay = () => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.muted = true; // stays muted so iOS accepts the gesture-driven play
+    const p = el.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+    setNeedsTap(false);
+  };
+
   const label = (() => {
+    if (needsTap) return "TAP TO PLAY";
     if (state === "live") return "LIVE";
     if (state === "connecting") return "CONNECTING…";
+    if (iceState && ["checking", "new"].includes(iceState)) return "ICE " + iceState.toUpperCase();
     if (state === "error") return "ERROR";
     if (status.publisher_connected) return "STARTING…";
     return "OFFLINE";
   })();
-  const live = state === "live";
+  const live = state === "live" && !needsTap;
 
   return (
     <div className={`hud-panel overflow-hidden ${compact ? "" : ""}`} data-testid="obs-stream-card">
@@ -181,22 +220,41 @@ export function ObsStream({ compact = false }) {
           playsInline
           webkit-playsinline="true"
           muted
+          onClick={needsTap ? kickPlay : undefined}
           className="w-full h-full object-contain"
         />
-        {!live && (
+        {needsTap && (
+          <button
+            onClick={kickPlay}
+            data-testid="obs-stream-tap"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center bg-[rgba(0,0,0,0.7)] hover:bg-[rgba(0,0,0,0.55)] transition-colors"
+          >
+            <div className="h-14 w-14 rounded-full bg-[var(--kink-purple)] flex items-center justify-center">
+              <Video size={26} className="text-[var(--kink-base)]" />
+            </div>
+            <span className="font-display text-xs tracking-[0.15em] text-white">TAP TO PLAY</span>
+            <span className="font-mono-data text-[10px] text-[var(--kink-muted)]">iOS blocks WebRTC autoplay</span>
+          </button>
+        )}
+        {!live && !needsTap && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6 bg-[rgba(0,0,0,0.6)]">
-            {state === "connecting" ? (
+            {state === "connecting" || (status.publisher_connected && iceState && iceState !== "failed") ? (
               <Loader2 className="animate-spin text-[var(--kink-purple)]" size={26} />
             ) : (
               <VideoOff className="text-[var(--kink-muted)]" size={26} />
             )}
             <p className="font-mono-data text-xs text-[var(--kink-text-2)] max-w-xs">
-              {state === "error"
-                ? (error || "Could not connect to stream.")
+              {state === "error" || (state === "waiting" && error)
+                ? error
                 : status.publisher_connected
-                  ? "Buffering the live feed…"
+                  ? (iceState ? `Negotiating (${iceState})…` : "Buffering the live feed…")
                   : "No OBS stream is being sent yet."}
             </p>
+            {iceState && !live && (
+              <span data-testid="obs-stream-ice-state" className="font-mono-data text-[10px] text-[var(--kink-muted)]">
+                ICE: {iceState}
+              </span>
+            )}
             {(state === "error" || state === "waiting") && (
               <button
                 onClick={connect}

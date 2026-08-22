@@ -19,7 +19,17 @@ services:
       # Publish the same range in `ports:` below and advertise a host-reachable
       # IP so ICE actually connects instead of hanging in "connecting".
       STREAM_UDP_MIN: ${STREAM_UDP_MIN:-50000}
-      STREAM_UDP_MAX: ${STREAM_UDP_MAX:-50019}
+      STREAM_UDP_MAX: ${STREAM_UDP_MAX:-50099}
+      # STUN servers (comma-separated). Defaults to Google + Cloudflare public
+      # STUN; override in .env only if you need private/self-hosted STUN.
+      STREAM_STUN_SERVERS: ${STREAM_STUN_SERVERS:-}
+      # Optional TURN relay for mobile clients behind symmetric NAT / CGNAT
+      # (most 4G/5G carriers). Without this, direct WebRTC fails on those
+      # networks. Bring your own TURN (e.g. Twilio, Cloudflare, self-hosted
+      # coturn) or leave blank to disable.
+      STREAM_TURN_URL: ${STREAM_TURN_URL:-}
+      STREAM_TURN_USERNAME: ${STREAM_TURN_USERNAME:-}
+      STREAM_TURN_PASSWORD: ${STREAM_TURN_PASSWORD:-}
       # 127.0.0.1 works when OBS runs on the same Mac as Docker. For LAN OBS,
       # set this to the Mac's LAN IP (e.g., 192.168.1.42) in .env. For remote
       # OBS behind a public domain, set it to the public IP / DDNS host.
@@ -31,7 +41,7 @@ services:
     ports:
       # Publish the WebRTC UDP port range to the host so OBS can send RTP in.
       # If you change STREAM_UDP_MIN/MAX in .env, change these too.
-      - "${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50019}:${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50019}/udp"
+      - "${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50099}:${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50099}/udp"
     depends_on:
       - mongo
     networks:

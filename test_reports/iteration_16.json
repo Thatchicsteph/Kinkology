@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration 16 \u2014 backend-only verification of the STUN/TURN ICE wiring in /app/backend/stream.py (mobile black-screen bug). New suite /app/backend/tests/test_stream_ice_stun.py (16 tests) covers _ice_servers() env parsing, _new_pc() config, live WHEP with STUN, and the docker-compose UDP range bump. Combined run with all prior stream/resolver/chat regression suites: 68/68 PASSED. All four /app/tests E2E scripts (test_whip_whep, test_whip_auth, test_chat_and_lock, test_toy_relay) exited 0. DECISIVE SIGNAL: outbound STUN works from this pod \u2014 the WHEP answer now contains real srflx candidates, e.g. `a=candidate:... 104.198.214.223 39077 typ srflx raddr 10.231.154.50 rport 54779`, alongside the rewritten IPv4 `typ host` line. That is the missing piece mobile clients needed. TURN path also exercised end-to-end: appended STREAM_TURN_URL=turn:t.example:3478 / USERNAME=u / PASSWORD=p to backend/.env, restarted backend, published via aiortc and POSTed /api/whep with Host: tg30.ddns.net \u2014 got 201 with host candidate 90.210.68.208 (resolved FQDN) + srflx, no crash from the unresolvable TURN host; env then removed and backend restarted clean (verified STREAM_TURN absent, /api/stream/status healthy). Regressions all hold: FQDN\u2192IPv4 literal, 192.168.1.42 passthrough, localhost\u2192127.0.0.1, CRLF-only answers, 5 concurrent unresolvable-Host WHEP posts in well under 3.5s.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "docker-compose.yml (backend service env)",
+        "issue": "The new STREAM_STUN_SERVERS / STREAM_TURN_URL / STREAM_TURN_USERNAME / STREAM_TURN_PASSWORD vars are NOT declared in the backend service `environment:` block, so a self-hosted Docker deployment can never configure them from .env \u2014 it silently gets only the hardcoded Google/Cloudflare STUN defaults and TURN is unreachable. Since symmetric-NAT / CGNAT mobile networks (the exact reported failure mode) need TURN, add pass-throughs: STREAM_STUN_SERVERS: ${STREAM_STUN_SERVERS:-}, STREAM_TURN_URL: ${STREAM_TURN_URL:-}, etc. (and document them in env.docker.example)."
+      },
+      {
+        "endpoint": "stream._ice_servers()",
+        "issue": "STREAM_STUN_SERVERS=\"\" (explicit empty string) returns [] \u2014 i.e. STUN silently disabled with no log warning. A stray empty var in .env would reintroduce the original mobile bug invisibly. Log a warning when the resulting iceServers list is empty."
+      },
+      {
+        "endpoint": "stream._ice_servers()",
+        "issue": "No validation of URL scheme. A typo like STREAM_STUN_SERVERS=stunn:foo:3478 is passed straight to aiortc; aioice will raise/ignore per-server at gathering time rather than failing fast at config time. Consider filtering to stun:/stuns:/turn:/turns: prefixes and logging rejects."
+      },
+      {
+        "endpoint": "stream._ice_servers()",
+        "issue": "No caching/logging of the effective ICE config: it is re-read from os.environ on every PeerConnection creation, and nothing is logged at startup, so operators cannot confirm which STUN/TURN servers are actually in use when debugging a phone. Log the resolved server list once at import/startup."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_stream_ice_stun.py",
+    "/app/tests/probe_turn_env_whep.py",
+    "/app/test_reports/pytest/iter16_ice_stun.xml",
+    "/app/test_reports/pytest/iter16_regression.xml"
+  ],
+  "action_items": [
+    "Add STREAM_STUN_SERVERS / STREAM_TURN_URL / STREAM_TURN_USERNAME / STREAM_TURN_PASSWORD pass-throughs to the backend service in docker-compose.yml and document them in env.docker.example \u2014 otherwise the TURN escape hatch is dead code for self-hosted users (highest-value remaining item for the mobile bug).",
+    "Log the effective ICE server list at backend startup and warn when it resolves to an empty list.",
+    "Optional: validate STUN/TURN URL schemes in _ice_servers() and drop invalid entries with a log line."
+  ],
+  "critical_code_review_comments": [
+    "stream.py is 477 lines and growing; the ICE/host-rewrite helpers (_ice_servers, _new_pc, _resolve_viewer_host, _cache_put, _looks_like_ipv4) are cohesive enough to move into a small stream_ice.py module before the file crosses the 700-line threshold.",
+    "Verified via source assertion that no bare `RTCPeerConnection()` remains in stream.py \u2014 both WHIP and WHEP call sites use _new_pc(). Keep a lint/test guard (already added as TestNewPc::test_call_sites_use_new_pc) so a future edit cannot silently drop STUN again.",
+    "TURN credentials come from env but are never redacted in any log path; if the startup logging suggested above is added, mask STREAM_TURN_PASSWORD."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_stream_ice_stun.py",
+    "/app/tests/probe_turn_env_whep.py"
+  ],
+  "success_rate": {"backend": "100% (68/68 pytest + 4/4 E2E scripts)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "None persisted. Transient synthetic aiortc WHIP publishers (lavfi color sources) created and torn down per test; publisher slot released after each suite.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (not needed for stream endpoints \u2014 publish_token_required=false in this env)",
+  "context_for_next_testing_agent": "STUN is confirmed working from inside this pod: WHEP answers contain `typ srflx` candidates with public IP 104.198.214.223, so any future mobile-ICE failure is NOT a missing-srflx problem. New regression suite: /app/backend/tests/test_stream_ice_stun.py (env-parsing tests use a clean_ice_env fixture that snapshots/restores STREAM_STUN_SERVERS + STREAM_TURN_*). To re-test TURN end-to-end, append STREAM_TURN_* to /app/backend/.env, `sudo supervisorctl restart backend`, run `python /app/tests/probe_turn_env_whep.py`, then restore .env and restart. Note: uvicorn --reload watches /app/backend/tests, so writing test files triggers a backend reload \u2014 sleep ~5s after creating a test file before hitting the API. Frontend ObsStream.jsx (Tap-to-Play overlay `obs-stream-tap`, `obs-stream-ice-state` pill, 12s ICE timeout) was NOT tested per request scope and still needs a Playwright/manual pass.",
+  "rca_of_the_issue": "Original mobile black-screen root cause confirmed as two-part: (1) backend aiortc PeerConnections were created with no RTCConfiguration, so aioice gathered only container-local `typ host` candidates and ICE could never complete for a phone on a foreign NAT; (2) iOS Safari blocks WebRTC autoplay silently. Fix (1) is now verified working at the protocol level \u2014 _ice_servers() parses env correctly for all 6 cases tested and _new_pc() is used at both call sites, producing genuine srflx candidates in the SDP answer. Residual risk: symmetric NAT / CGNAT mobile carriers require TURN, and TURN cannot currently be configured in the shipped docker-compose because the env vars are not passed into the container."
+}

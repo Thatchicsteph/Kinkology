@@ -367,7 +367,10 @@ class TestSettings:
         # session/state includes limits
         r3 = api.get(f"{BASE_URL}/api/session/state")
         assert r3.status_code == 200
-        assert r3.json().get("limits") == {"min_depth": 40, "max_speed": 70}
+        limits = r3.json().get("limits") or {}
+        # `limits` also carries max_depth (derived from toy geometry), so assert
+        # on the fields this test owns instead of exact-matching the whole dict.
+        assert limits.get("min_depth") == 40 and limits.get("max_speed") == 70
 
     def test_put_settings_validation(self, api, auth):
         r = api.put(f"{BASE_URL}/api/settings", json={"min_depth": -1, "max_speed": 50})

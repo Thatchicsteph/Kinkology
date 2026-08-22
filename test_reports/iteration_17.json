@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 17 backend-only verification of the TURN/STUN delivery layer for the mobile black-screen fix. Verified docker-compose.yml backend.environment pass-throughs, env.docker.example documentation, and _log_ice_config() record content (defaults / empty-warn / TURN credential redaction) via in-process logging.Handler capture. Ran the full backend pytest suite (174 tests), the prior ICE suite, all four e2e scripts, and a live TURN-env-set backend restart + WHIP/WHEP probe. New suite /app/backend/tests/test_ice_config_delivery.py: 16/16 pass. Full backend suite: 174/174 pass after two pre-existing test-code issues were fixed (stale settings assertion, IP-keyed lockout flakiness). All four e2e scripts exit 0 both before and after the TURN-env restart cycle. No application bugs found in the iteration-17 changes.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/login, /api/auth/2fa/*", "issue": "Brute-force lockout is keyed on client-IP + email only (client_ip() reads the first X-Forwarded-For hop). In this preview env the egress NAT rotates source IPs across new TCP connections, so 6 wrong logins split into two counter docs (count=5 @35.184.53.215 and count=1 @104.198.214.223) and the lockout was NOT triggered. Real clients on rotating egress/CGNAT/IPv6 pools — or anyone spoofing XFF where the proxy chain isn't trusted — can therefore bypass the 5-attempt lockout. Recommend an additional per-account (email-only) counter alongside the per-IP one."},
+      {"endpoint": "startup log", "issue": "_log_ice_config() is called at module import, before uvicorn reconfigures logging, so the masked ICE line never lands in supervisor's captured stderr in the preview env. Function-level emission was verified as correct. Consider moving the call into the FastAPI startup event so it is visible in preview too (production docker-compose is unaffected)."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_ice_config_delivery.py",
+    "/app/test_reports/pytest/iter17_ice_delivery.xml",
+    "/app/test_reports/pytest/iter17_ice_stun.xml",
+    "/app/test_reports/pytest/iter17_full_regression.xml"
+  ],
+  "action_items": [
+    "OPTIONAL (security hardening, not iteration-17 scope): add a per-account lockout counter in addition to the per-IP one in check_lockout/record_failure — IP-keyed-only lockout is bypassable from rotating egress IPs (reproduced, see rca_of_the_issue).",
+    "OPTIONAL: move _log_ice_config() into the FastAPI startup handler so the masked ICE line is visible under uvicorn/supervisor logging as well.",
+    "No action required for the iteration-17 deliverables — docker-compose pass-throughs, env.docker.example docs, log masking, and server.py wiring all verified correct."
+  ],
+  "critical_code_review_comments": [
+    "docker-compose.yml: all four keys (STREAM_STUN_SERVERS, STREAM_TURN_URL, STREAM_TURN_USERNAME, STREAM_TURN_PASSWORD) are present under backend.environment and all use the ${VAR:-} form, so compose will not fail on unset .env vars. Verified by parsing the YAML and regex-matching each value.",
+    "_log_ice_config() redaction is correct: turn/turns URLs render as 'turn:host:port (user=u pass=***)'. Verified the password does not appear in the formatted message NOR in record.args (no lazy-format leak).",
+    "_ice_servers() reads env at call time, so STREAM_STUN_SERVERS=\"\" correctly produces an empty list and the WARNING path fires; the default (unset) path yields both Google + Cloudflare STUN.",
+    "server.py line 29 imports _log_ice_config from stream and line 34 calls it immediately after stream_patch.apply() at line 33 — ordering verified.",
+    "Docker binary is not available in this container, so `docker compose config` interpolation could not be executed; validation was static (YAML parse + ${VAR:-} regex). Interpolation semantics were separately validated by injecting STREAM_TURN_* into backend/.env, restarting the backend, and confirming WHIP/WHEP still return 201 with srflx candidates and no credential leak in logs."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_ice_config_delivery.py (new, 16 tests)",
+    "/app/backend/tests/backend_test.py (test-only: TestSettings limits assertion was exact-matching {min_depth,max_speed} but the API legitimately also returns max_depth; relaxed to field-level assertions)",
+    "/app/backend/tests/test_lockout.py (test-only: all requests now go through a shared keep-alive requests.Session so every attempt originates from one source IP; previously flaky, failing 1-3 of 7 tests non-deterministically)"
+  ],
+  "success_rate": {"backend": "100% (174/174 pytest + 16/16 new ICE-delivery + 4/4 e2e scripts)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "None persisted. Temporarily appended STREAM_TURN_URL/USERNAME/PASSWORD to /app/backend/.env for the live TURN probe, then restored the original .env and restarted the backend (verified STREAM_TURN count == 0 in .env afterwards). login_attempts collection was cleared during lockout RCA.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "Iteration 17 deliverables are fully verified — do not re-litigate docker-compose/env.docker.example/_log_ice_config; /app/backend/tests/test_ice_config_delivery.py covers them as a regression suite (16 tests, 0.3s, no network needed). Full backend suite is now 174/174 green and stable across 3 consecutive runs. IMPORTANT ENV GOTCHA: this pod's egress NAT rotates source IPs per new TCP connection (observed 35.184.53.215 and 104.198.214.223). Any test that depends on IP-keyed server state (rate limits, lockout) MUST reuse a single requests.Session, otherwise it is flaky — test_lockout.py has been fixed this way. The startup ICE log will never appear in `tail /var/log/supervisor/backend.*.log` because the call happens at import before uvicorn reconfigures logging; assert on logger records via a logging.Handler instead. Live TURN probe: /app/tests/probe_turn_env_whep.py works after appending STREAM_TURN_* to /app/backend/.env + `sudo supervisorctl restart backend` — remember to restore .env.",
+  "rca_of_the_issue": "Two pre-existing TEST defects (not iteration-17 regressions) were root-caused and fixed. (1) backend_test.py TestSettings asserted `limits == {min_depth, max_speed}` but server.py line 272/1313 legitimately includes max_depth in hub.limits, so /api/session/state returns three keys — stale assertion, relaxed to field-level checks. (2) test_lockout.py failed non-deterministically (1-3 of 7 tests, varying set each run). Reproduced with a direct probe: 6 wrong logins issued over 6 separate TCP connections produced TWO login_attempts docs ('35.184.53.215:login:admin@ossm.local' count=5 locked, '104.198.214.223:login:admin@ossm.local' count=1) because the pod's egress NAT assigns different source IPs per connection, and check_lockout()/record_failure() key on client_ip()+email. The same 6 requests over one keep-alive Session correctly returned 401x5 then 429. Mitigation applied in test code (shared Session); the underlying per-IP-only lockout keying is reported as a minor security finding for the developer agent since fixing it is business/security logic."
+}

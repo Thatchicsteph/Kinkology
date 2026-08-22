@@ -35,6 +35,14 @@ ADMIN_EMAIL = "admin@ossm.local"
 ADMIN_PASSWORD = "ossm-admin-2026"
 
 
+# NOTE (iteration 17): the lockout counter is keyed on client IP + email. The
+# preview environment's egress NAT hands out DIFFERENT source IPs to new TCP
+# connections, which splits the counter across identifiers and makes these
+# tests flaky. Reuse one keep-alive Session so every attempt in a test comes
+# from the same source IP.
+_S = requests.Session()
+
+
 def _mongo():
     return MongoClient(os.environ["MONGO_URL"])
 
@@ -77,7 +85,7 @@ def _final_cleanup():
 
 
 def _login(email, password):
-    return requests.post(f"{BASE_URL}/api/auth/login",
+    return _S.post(f"{BASE_URL}/api/auth/login",
                          json={"email": email, "password": password})
 
 
@@ -147,12 +155,12 @@ class Test2FALoginLockout:
         hdr = {"Authorization": f"Bearer {bearer}",
                "Content-Type": "application/json"}
         # setup start
-        s = requests.post(f"{BASE_URL}/api/auth/2fa/setup/start", headers=hdr)
+        s = _S.post(f"{BASE_URL}/api/auth/2fa/setup/start", headers=hdr)
         assert s.status_code == 200
         secret = s.json()["secret"]
         # verify to enable
         code = pyotp.TOTP(secret).now()
-        v = requests.post(f"{BASE_URL}/api/auth/2fa/setup/verify",
+        v = _S.post(f"{BASE_URL}/api/auth/2fa/setup/verify",
                           json={"code": code}, headers=hdr)
         assert v.status_code == 200
         _clear_attempts()
@@ -166,13 +174,13 @@ class Test2FALoginLockout:
             r = _login(ADMIN_EMAIL, ADMIN_PASSWORD)
             mfa_token = r.json()["mfa_token"]
             c = pyotp.TOTP(secret).now()
-            r2 = requests.post(f"{BASE_URL}/api/auth/2fa/login",
+            r2 = _S.post(f"{BASE_URL}/api/auth/2fa/login",
                                json={"mfa_token": mfa_token, "code": c})
             b2 = r2.json()["token"]
             h2 = {"Authorization": f"Bearer {b2}",
                   "Content-Type": "application/json"}
             c2 = pyotp.TOTP(secret).now()
-            requests.post(f"{BASE_URL}/api/auth/2fa/disable",
+            _S.post(f"{BASE_URL}/api/auth/2fa/disable",
                           json={"code": c2}, headers=h2)
         except Exception:
             pass
@@ -189,10 +197,10 @@ class Test2FALoginLockout:
     def test_4_2fa_login_wrong_five_then_429(self):
         mfa = self._get_mfa_token()
         for i in range(5):
-            r = requests.post(f"{BASE_URL}/api/auth/2fa/login",
+            r = _S.post(f"{BASE_URL}/api/auth/2fa/login",
                               json={"mfa_token": mfa, "code": "000000"})
             assert r.status_code == 401, f"attempt {i+1}: {r.status_code} {r.text}"
-        r6 = requests.post(f"{BASE_URL}/api/auth/2fa/login",
+        r6 = _S.post(f"{BASE_URL}/api/auth/2fa/login",
                            json={"mfa_token": mfa, "code": "000000"})
         assert r6.status_code == 429, r6.text
         assert "Retry-After" in r6.headers
@@ -201,12 +209,12 @@ class Test2FALoginLockout:
         mfa = self._get_mfa_token()
         # 3 wrong
         for _ in range(3):
-            r = requests.post(f"{BASE_URL}/api/auth/2fa/login",
+            r = _S.post(f"{BASE_URL}/api/auth/2fa/login",
                               json={"mfa_token": mfa, "code": "000000"})
             assert r.status_code == 401
         # correct
         code = pyotp.TOTP(self.secret).now()
-        r_ok = requests.post(f"{BASE_URL}/api/auth/2fa/login",
+        r_ok = _S.post(f"{BASE_URL}/api/auth/2fa/login",
                              json={"mfa_token": mfa, "code": code})
         assert r_ok.status_code == 200, r_ok.text
 
@@ -230,15 +238,15 @@ class Test2FASetupAndDisableLockout:
         hdr = {"Authorization": f"Bearer {bearer}",
                "Content-Type": "application/json"}
         # start setup
-        s = requests.post(f"{BASE_URL}/api/auth/2fa/setup/start", headers=hdr)
+        s = _S.post(f"{BASE_URL}/api/auth/2fa/setup/start", headers=hdr)
         assert s.status_code == 200
         # 5 wrong codes -> 400
         for i in range(5):
-            rv = requests.post(f"{BASE_URL}/api/auth/2fa/setup/verify",
+            rv = _S.post(f"{BASE_URL}/api/auth/2fa/setup/verify",
                                json={"code": "000000"}, headers=hdr)
             assert rv.status_code == 400, f"attempt {i+1}: {rv.status_code}"
         # 6th -> 429
-        r6 = requests.post(f"{BASE_URL}/api/auth/2fa/setup/verify",
+        r6 = _S.post(f"{BASE_URL}/api/auth/2fa/setup/verify",
                            json={"code": "000000"}, headers=hdr)
         assert r6.status_code == 429, r6.text
         assert "Retry-After" in r6.headers
@@ -254,9 +262,9 @@ class Test2FASetupAndDisableLockout:
         bearer = r.json()["token"]
         hdr = {"Authorization": f"Bearer {bearer}",
                "Content-Type": "application/json"}
-        s = requests.post(f"{BASE_URL}/api/auth/2fa/setup/start", headers=hdr)
+        s = _S.post(f"{BASE_URL}/api/auth/2fa/setup/start", headers=hdr)
         secret = s.json()["secret"]
-        v = requests.post(f"{BASE_URL}/api/auth/2fa/setup/verify",
+        v = _S.post(f"{BASE_URL}/api/auth/2fa/setup/verify",
                           json={"code": pyotp.TOTP(secret).now()},
                           headers=hdr)
         assert v.status_code == 200
@@ -264,7 +272,7 @@ class Test2FASetupAndDisableLockout:
         # login via 2FA to get valid bearer post-enable
         rl = _login(ADMIN_EMAIL, ADMIN_PASSWORD)
         mfa = rl.json()["mfa_token"]
-        rr = requests.post(f"{BASE_URL}/api/auth/2fa/login",
+        rr = _S.post(f"{BASE_URL}/api/auth/2fa/login",
                            json={"mfa_token": mfa,
                                  "code": pyotp.TOTP(secret).now()})
         assert rr.status_code == 200
@@ -275,17 +283,17 @@ class Test2FASetupAndDisableLockout:
 
         # 5 wrong disable codes -> 400
         for i in range(5):
-            rd = requests.post(f"{BASE_URL}/api/auth/2fa/disable",
+            rd = _S.post(f"{BASE_URL}/api/auth/2fa/disable",
                                json={"code": "000000"}, headers=hdr2)
             assert rd.status_code == 400, f"attempt {i+1}: {rd.status_code} {rd.text}"
-        r6 = requests.post(f"{BASE_URL}/api/auth/2fa/disable",
+        r6 = _S.post(f"{BASE_URL}/api/auth/2fa/disable",
                            json={"code": "000000"}, headers=hdr2)
         assert r6.status_code == 429, r6.text
         assert "Retry-After" in r6.headers
 
         # Cleanup: clear lockout then disable with valid TOTP
         _clear_attempts()
-        rd_ok = requests.post(f"{BASE_URL}/api/auth/2fa/disable",
+        rd_ok = _S.post(f"{BASE_URL}/api/auth/2fa/disable",
                               json={"code": pyotp.TOTP(secret).now()},
                               headers=hdr2)
         assert rd_ok.status_code == 200

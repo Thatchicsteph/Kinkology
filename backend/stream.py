@@ -23,14 +23,73 @@ import secrets
 import time
 from typing import Awaitable, Callable, Dict, List, Optional
 
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
 from aiortc.contrib.media import MediaRelay
 from aiortc.rtcrtpsender import RTCRtpSender
 from fastapi import APIRouter, HTTPException, Request, Response
 
+import os
+
 from stream_patch import rewrite_incoming_sdp
 
 logger = logging.getLogger("ossm-bridge.stream")
+
+
+def _ice_servers() -> List[RTCIceServer]:
+    """Read STUN + optional TURN servers from env so aiortc can gather
+    server-reflexive candidates. Without STUN, backend inside a Docker bridge
+    network only ever advertises its unreachable container IP, which is why
+    mobile clients over 4G/5G or on foreign networks can't complete ICE.
+
+    Env vars (comma-separated URLs):
+        STREAM_STUN_SERVERS  default: stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478
+        STREAM_TURN_URL      optional, e.g. turn:turn.example.com:3478
+        STREAM_TURN_USERNAME
+        STREAM_TURN_PASSWORD
+    """
+    servers: List[RTCIceServer] = []
+    stun_env = os.environ.get(
+        "STREAM_STUN_SERVERS",
+        "stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478",
+    )
+    stun_urls = [u.strip() for u in stun_env.split(",") if u.strip()]
+    if stun_urls:
+        servers.append(RTCIceServer(urls=stun_urls))
+    turn_url = (os.environ.get("STREAM_TURN_URL") or "").strip()
+    if turn_url:
+        servers.append(RTCIceServer(
+            urls=[turn_url],
+            username=os.environ.get("STREAM_TURN_USERNAME") or None,
+            credential=os.environ.get("STREAM_TURN_PASSWORD") or None,
+        ))
+    return servers
+
+
+def _log_ice_config() -> None:
+    """Print the effective ICE server list once at startup so operators
+    can confirm STUN/TURN are wired up when debugging phone playback."""
+    servers = _ice_servers()
+    if not servers:
+        logger.warning(
+            "stream: NO ICE servers configured — mobile clients on foreign "
+            "networks will fail. Set STREAM_STUN_SERVERS or leave the default."
+        )
+        return
+    summary = []
+    for s in servers:
+        urls = s.urls if isinstance(s.urls, list) else [s.urls]
+        for u in urls:
+            if u.lower().startswith(("turn:", "turns:")):
+                # Redact credentials so tail/journal aren't leaking secrets.
+                summary.append(f"{u} (user={s.username or '-'} pass={'***' if s.credential else '-'})")
+            else:
+                summary.append(u)
+    logger.info("stream ICE servers: %s", ", ".join(summary))
+
+
+def _new_pc() -> RTCPeerConnection:
+    """RTCPeerConnection with STUN/TURN pre-configured so ICE can traverse NAT."""
+    return RTCPeerConnection(configuration=RTCConfiguration(iceServers=_ice_servers()))
 
 # Small TTL cache so we don't resolve the same Host header on every WHEP call.
 # Value is (ip, expires_at); positive TTL 60s, negative TTL 5s so a transient
@@ -275,7 +334,7 @@ async def whip_publish(request: Request) -> Response:
         if hub.publisher_pc is not None:
             await hub.close_publisher()
 
-        pc = RTCPeerConnection()
+        pc = _new_pc()
         sid = secrets.token_hex(8)
         hub.publisher_pc = pc
         hub.publisher_id = sid
@@ -369,7 +428,7 @@ async def whep_view(request: Request) -> Response:
     sdp = await _read_sdp(request)
     sdp = rewrite_incoming_sdp(sdp)
 
-    pc = RTCPeerConnection()
+    pc = _new_pc()
     sid = secrets.token_hex(8)
     hub.viewers[sid] = pc
 

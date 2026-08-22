@@ -26,11 +26,12 @@ import csv
 import json
 from io import BytesIO, StringIO
 
-from stream import router as stream_router, shutdown as stream_shutdown, set_publish_token_provider
+from stream import router as stream_router, shutdown as stream_shutdown, set_publish_token_provider, _log_ice_config
 import stream_patch
 
 # Install aioice NAT/Docker patch BEFORE any RTCPeerConnection is created.
 stream_patch.apply()
+_log_ice_config()
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
