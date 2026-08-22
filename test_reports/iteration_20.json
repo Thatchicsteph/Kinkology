@@ -1,0 +1,70 @@
+{
+  "summary": "Iteration 20 focused on the two new features: Copy/Share Spectator Link (POST /api/codes/spectator-link + admin button) and Guest Reactions (ReactionBar + FloatingReactions over the stream). BACKEND: new pytest suite /app/backend/tests/test_spectator_link_reactions.py — 7/7 pass. Verified spectator-link requires auth (403 unauth), returns view_only=true / granted_seconds=0 / no mongo _id, is idempotent (reuses newest non-revoked view-only code), appears in GET /api/codes, and its WS accepts with you.status=='spectator'. Reaction relay over WS verified end-to-end: guest reaction bounces to owner + all guests with the SAME id/author, owner reaction reaches guests with author 'Owner', 400ms per-sender rate limit drops a 3-click burst to 1, non-whitelisted emoji (🤖) is silently dropped, view-only spectators can still react. Regression suite test_regression_core.py 4/4 pass. FRONTEND (Playwright, 2 browser contexts, clipboard perms granted): SHARE SPECTATOR LINK POSTs, writes <public_url>/c/<CODE> to clipboard, toast text contains the CODE; the code shows in ISSUED CODES with view-only-badge-<CODE> and NO addmin-<CODE> button; copy-<CODE> copies the identical URL. Guest /c/<SPECTATOR_CODE> lands in spectator-state with chat panel, spectator-badge, 0 control consoles, reaction-bar with all six buttons (🔥💦😩👏😈💜). Clicking 🔥 renders floating-reaction-<id> inside floating-reactions-layer on BOTH guest and admin within ~1.2s with matching ids. Layer is position:absolute + pointer-events:none inside a position:relative parent (obs-stream-with-reactions on admin, stream-container on guest). Client 400ms throttle verified by instrumenting WebSocket.send: a 150ms double-click emits exactly ONE frame; two clicks >500ms apart emit two. Control-code guest (5 min) lands in the control console view and reactions work there too. Regression: view-only creation via code-view-only-input with label TEST_Alice works (minutes input disabled, VIEW ONLY badge, no +10M). ONE REAL BUG FOUND: FloatingReactions resurrects already-dismissed reactions — every new reaction re-mounts and re-animates all previous ones still held in the parent's reactions array (observed 1 -> 2 -> 3 simultaneous emojis for reactions sent 4s apart, on both admin and guest).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/codes/spectator-link",
+        "issue": "Not scoped to the requesting owner: it reuses/returns the most recent non-revoked view-only code created by ANY means (e.g. a guest-labelled 'Watcher'/'Alice' view-only code created through the New Access Code form). Single-owner app today, but the button can silently hand out a code the owner created for someone else, and its label/analytics are then mixed. Consider tagging spectator-link codes (source='spectator_link') and only reusing those."
+      },
+      {
+        "endpoint": "Hub.broadcast_reaction",
+        "issue": "Rate-limit bucket is shared with chat (`chat_last_sent`, keyed 'react:<cid>'), so the reaction key never collides with chat — fine — but the map is never pruned for disconnected clients, a slow unbounded memory growth for long-lived processes."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "FloatingReactions.jsx",
+        "issue": "Dismissed reactions come back. The de-dupe effect compares incoming `reactions` against the current `visible` state; once an emoji auto-dismisses onAnimationEnd it is no longer in `visible`, so the next incoming reaction re-adds every earlier item still present in the parent's `reactions` array (last 24 kept). Reproduced on BOTH admin and guest: reactions sent ~4s apart rendered 1, then 2, then 3 emojis simultaneously (ids: d84c78fb; d84c78fb+bd7af3d1; d84c78fb+bd7af3d1+e30a7870). After ~24 reactions a single tap replays a wall of 20+ emojis. Fix: track processed ids in a useRef Set (never cleared by dismiss), or have the parent drop consumed reactions.",
+        "selector": "[data-testid^='floating-reaction-']",
+        "priority": "HIGH"
+      },
+      {
+        "component": "AdminDashboard.jsx",
+        "issue": "Owner has no way to react: backend supports owner reactions ({type:'reaction'} on /api/ws/host, author 'Owner', verified working via pytest) but the admin dashboard renders no ReactionBar (reaction-bar count = 0 on /admin). Dead backend capability / likely intended feature gap.",
+        "selector": "[data-testid='reaction-bar']",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Share Spectator Link → open link",
+        "issue": "The copied URL uses the admin-configured public_url (https://tg30.ddns.net/c/<CODE>) rather than the current origin, so in the preview environment the copied link opens a different deployment and shows 'CODE NOT VALID'. Correct product behaviour for self-hosting, but worth a note/fallback: if public_url is not the current origin the owner cannot verify the link from the preview host. Same URL is produced by copy-<CODE>, so behaviour is at least consistent.",
+        "affected_selectors": ["[data-testid='share-spectator-link']", "[data-testid^='copy-']"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Admin dashboard / guest stream card",
+        "issues": ["Floating emojis animate from the bottom edge of the OBS card and, because of the resurrect bug above, can overlap into a cluster; no visual issues otherwise. Overlay correctly non-interactive (pointer-events:none) so nothing behind it is blocked (OBS was OFFLINE with no retry button rendered in this env, so obs-stream-retry click could not be exercised — verified indirectly via computed pointer-events:none and the OFFLINE placeholder remaining reachable)."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_spectator_link_reactions.py",
+    "/app/test_reports/pytest/iter20_spectator_reactions.xml"
+  ],
+  "action_items": [
+    "FIX FloatingReactions.jsx: de-dupe against a useRef Set of seen ids (or splice consumed items in the parent) so auto-dismissed emojis are not re-mounted and re-animated on every subsequent reaction.",
+    "Decide whether the owner should be able to send reactions from /admin — the backend handler already exists and works; add a ReactionBar next to the stream card or drop the owner path.",
+    "Optional: tag spectator-link-created codes and only reuse those, so the button never hands out a view-only code the owner minted for a named guest."
+  ],
+  "critical_code_review_comments": [
+    "FloatingReactions: `setVisible` dedupes against `prev` (visible) instead of an ever-seen ref — a classic resurrect bug; also Math.random() jitter is recomputed on re-add so the same emoji jumps position when it reappears.",
+    "GuestControl keeps `reactions` as a growing capped array (slice(-24)) used only as an event feed; a queue that is drained (or a ref-based seen-set in the child) would make the overlay stateless and fix the replay.",
+    "Hub.broadcast_reaction sends outside `hub.lock` while chat handlers hold it — fine today, but `self.clients` is iterated with list() only; a client disconnecting mid-broadcast relies on _send swallowing exceptions.",
+    "ReactionBar throttle is a single shared lastRef across all emojis, so tapping 🔥 then 💦 within 400ms silently drops the second emoji — matches the server bucket, but the UI gives no feedback that the tap was ignored."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_spectator_link_reactions.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7 new + 4/4 regression_core)", "frontend": "90% (11/12 checks; FloatingReactions replay bug is the only failure)"},
+  "seed_data_creation": "Created and deleted TEST_React (control), TEST_Alice (view-only), TEST_Ctrl (5min control) codes plus leftover TEST_LIVE/TEST_QA from earlier iterations — all removed via DELETE /api/codes/{id}. The reusable spectator code VVPQPP (label 'Watcher', pre-existing view-only) was reused by spectator-link and left in place.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 — worked",
+  "context_for_next_testing_agent": "Reaction relay backend is fully covered by /app/backend/tests/test_spectator_link_reactions.py (7 tests, ~22s). For frontend reaction testing: login testids are login-email/login-password/login-submit (NOT *-input); the spectator link copies the admin public_url domain (tg30.ddns.net) so always open the guest page on the preview origin instead. Repro for the FloatingReactions replay bug: click a reaction, wait 3.5s for dismissal, click another — admin/guest then show 2 floating-reaction elements instead of 1.",
+  "rca_of_the_issue": "FloatingReactions' useEffect computes `known` from the `visible` state. onAnimationEnd removes the item from `visible` but the parent's `reactions` array still holds it, so the next array identity change makes the effect treat the old item as new and re-mount it (with a fresh random left offset), replaying every past reaction still inside the 24-item window."
+}

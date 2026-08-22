@@ -15,9 +15,11 @@ import { ObsStream, ObsStreamSetup } from "@/components/ObsStream";
 import { BrowserPublisher } from "@/components/BrowserPublisher";
 import { CloudflareTurnCard } from "@/components/CloudflareTurnCard";
 import { ChatPanel } from "@/components/ChatPanel";
+import { FloatingReactions } from "@/components/FloatingReactions";
+import { ReactionBar } from "@/components/ReactionBar";
 import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
-import { LogOut, Bluetooth, BluetoothConnected, Power, SkipForward, Plus, Copy, Trash2, Ban, Clock, Activity, Ticket, Sliders, Heart } from "lucide-react";
+import { LogOut, Bluetooth, BluetoothConnected, Power, SkipForward, Plus, Copy, Trash2, Ban, Clock, Activity, Ticket, Sliders, Heart, Eye } from "lucide-react";
 import kinkologyMark from "@/assets/kinkology-mark.png";
 import { toast } from "sonner";
 
@@ -46,6 +48,7 @@ export default function AdminDashboard() {
   const [toysLocked, setToysLocked] = useState(false);
   const [chatMsgs, setChatMsgs] = useState([]);
   const [presence, setPresence] = useState(null);
+  const [reactions, setReactions] = useState([]);
   const ble = useBleHost({
     onCommand: toys.handleCommand,
     onToyCommand: toys.applyRemoteCommand,
@@ -57,6 +60,7 @@ export default function AdminDashboard() {
     onChatMsg: (m) => setChatMsgs((prev) => [...prev, m].slice(-50)),
     onChatCleared: () => setChatMsgs([]),
     onPresence: (p) => setPresence(p),
+    onReaction: (r) => setReactions((prev) => [...prev.slice(-24), r]),
   });
   bleRef.current = ble;
   const hr = useHeartRate();
@@ -161,6 +165,19 @@ export default function AdminDashboard() {
     toast.success("Guest link copied");
   };
 
+  const shareSpectatorLink = async () => {
+    try {
+      const { data } = await api.post("/codes/spectator-link");
+      const base = (urls.public_url || window.location.origin).replace(/\/+$/, "");
+      const url = `${base}/c/${data.code}`;
+      await navigator.clipboard.writeText(url);
+      toast.success(`Spectator link copied — ${data.code}`);
+      loadCodes();
+    } catch (e) {
+      toast.error("Could not create spectator link");
+    }
+  };
+
   const stopAll = async () => { await api.post("/session/stop"); toast("Emergency stop sent", { icon: "⛔" }); };
   const skip = async () => { await api.post("/session/skip"); loadState(); toast("Skipped to next guest"); };
 
@@ -173,6 +190,7 @@ export default function AdminDashboard() {
   };
 
   const sendChat = (text) => ble.sendHostMessage({ type: "chat", text });
+  const sendReaction = (emoji) => ble.sendHostMessage({ type: "reaction", emoji });
   const clearChat = async () => {
     try { await api.delete("/session/chat"); toast("Chat cleared"); }
     catch (e) { toast.error("Could not clear chat"); }
@@ -269,7 +287,11 @@ export default function AdminDashboard() {
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Live session monitor */}
         <section className="lg:col-span-2 space-y-6">
-          <ObsStream />
+          <div className="relative" data-testid="obs-stream-with-reactions">
+            <ObsStream />
+            <FloatingReactions reactions={reactions} />
+          </div>
+          <ReactionBar onReact={sendReaction} disabled={!ble.wsConnected} />
           <div className="hud-panel p-5 sm:p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2">
@@ -464,6 +486,14 @@ export default function AdminDashboard() {
             <h2 className="font-display font-black uppercase tracking-[0.08em] text-lg flex items-center gap-2 mb-5">
               <Ticket size={18} className="text-[var(--kink-purple)]" /> New Access Code
             </h2>
+            <button
+              type="button"
+              onClick={shareSpectatorLink}
+              data-testid="share-spectator-link"
+              className="w-full mb-5 inline-flex items-center justify-center gap-2 border border-[var(--kink-purple)]/40 hover:border-[var(--kink-purple)] hover:bg-[var(--kink-purple)]/10 text-[var(--kink-purple)] font-display tracking-[0.12em] py-3 text-sm active:scale-[0.99] transition-all"
+            >
+              <Eye size={15} /> SHARE SPECTATOR LINK
+            </button>
             <form onSubmit={createCode} className="space-y-4" data-testid="create-code-form">
               <div>
                 <label className="font-display text-xs tracking-[0.15em] text-[var(--kink-text-2)]">GUEST LABEL (OPTIONAL)</label>

@@ -118,6 +118,35 @@ body::before {
 ::-webkit-scrollbar-track { background: var(--kink-base); }
 ::-webkit-scrollbar-thumb { background: var(--kink-overlay); border-radius: 4px; }
 
+/* Floating reactions — emojis rise and fade over the stream. */
+@keyframes reaction-float {
+  0%   { opacity: 0; transform: translate(-50%, 0)   scale(0.6) rotate(-6deg); }
+  15%  { opacity: 1; transform: translate(-50%, -8%) scale(1.15) rotate(2deg); }
+  85%  { opacity: 1; transform: translate(-50%, -110%) scale(1)  rotate(-3deg); }
+  100% { opacity: 0; transform: translate(-50%, -160%) scale(0.85) rotate(0deg); }
+}
+.reaction-float {
+  position: absolute;
+  bottom: 8%;
+  pointer-events: none;
+  font-size: 44px;
+  line-height: 1;
+  filter: drop-shadow(0 3px 6px rgba(0,0,0,0.55)) drop-shadow(0 0 12px rgba(168,85,247,0.35));
+  animation: reaction-float 2.4s ease-out forwards;
+  will-change: transform, opacity;
+  user-select: none;
+}
+.reaction-float .reaction-author {
+  display: block;
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  text-align: center;
+  color: rgba(255,255,255,0.85);
+  margin-top: 4px;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+}
+
 /* Chat typing indicator dots — used by ChatPanel.jsx. */
 .chat-typing-dot {
   display: inline-block;

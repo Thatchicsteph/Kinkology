@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 21 retest of the iteration_20 findings. BACKEND: new suite /app/backend/tests/test_spectator_label_scoping.py (2 tests) + re-ran /app/backend/tests/test_spectator_link_reactions.py (7 tests) -> 9/9 PASS in 23s. Verified POST /api/codes/spectator-link now filters reuse by label='Spectator': a view-only code minted via the form with label 'TEST_Alice' is NOT returned; a separate label='Spectator', view_only=true, granted_seconds=0 code is issued, no mongo _id leak, idempotent on repeat call, and both codes persist correctly in GET /api/codes with their own labels. Reaction relay, rate limit, emoji whitelist, owner->guest author='Owner' and view-only spectator WS accept all still pass. FRONTEND (Playwright, 2 contexts, clipboard perms): (1) REGRESSION FIX CONFIRMED — guest sent 🔥, waited 3.5s until zero floating-reaction-<id> in DOM on both admin and guest, then 💦, then 😩: each send rendered EXACTLY ONE floating emoji on BOTH admin and guest overlays with the correct emoji; no dismissed emoji reappeared at any point (previously 1->2->3). (2) NEW owner ReactionBar on /admin works: reaction-bar renders under obs-stream-with-reactions, clicking reaction-btn-🔥 produced one floating emoji on admin AND on the guest page, with the guest's .reaction-author label reading exactly 'OWNER'; a second owner reaction (💦) after fade-out rendered only the new emoji. (3) SHARE SPECTATOR LINK writes <public_url>/c/ZYYM2N to the clipboard, the card in ISSUED CODES shows label 'Spectator' + VIEW ONLY + 'Spectator link — no timer', and the code differs from the Alice code (5UBMMB). Both previously reported bugs are fixed; no new bugs found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/codes/spectator-link",
+        "issue": "Reuse query is still not owner-scoped (matches any non-revoked view_only code with label=='Spectator'); harmless in this single-owner app but will collide in multi-owner setups. Also, if the owner manually creates a view-only code and names it exactly 'Spectator', the button will adopt it."
+      },
+      {
+        "endpoint": "Hub reaction/chat rate-limit map",
+        "issue": "Carried over from iteration_20: chat_last_sent / 'react:<cid>' buckets are never pruned for disconnected clients (slow unbounded growth)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Share Spectator Link -> open link",
+        "issue": "Carried over (expected product behaviour): clipboard URL uses the admin-configured public_url (https://tg30.ddns.net/c/<CODE>), not the current origin, so the copied link cannot be opened from the preview host. Guest verification was done on the preview origin instead.",
+        "affected_selectors": ["[data-testid='share-spectator-link']"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Admin dashboard",
+        "issues": ["Cosmetic only: ISSUED CODES now holds 33 entries (leftover test/spectator codes from prior iterations) which makes the list long; consider a filter/archive. Reaction bar spacing/contrast under the OBS card looks correct and the overlay stays pointer-events:none."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_spectator_label_scoping.py",
+    "/app/backend/tests/test_spectator_link_reactions.py",
+    "/app/test_reports/pytest/iter21.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "FloatingReactions seenRef Set grows for the lifetime of the page (one uuid per reaction). Fine for a session, but on a multi-hour stream with heavy reactions it is unbounded memory; consider capping/pruning (e.g. keep last 500 ids).",
+    "ReactionBar still uses a single shared 400ms lastRef across all emojis, so tapping two different emojis within 400ms silently drops the second with no user feedback (matches server bucket, but no UI hint).",
+    "AdminDashboard sendReaction is a no-op when the host WS is not open (sendHostMessage silently returns); the bar is disabled via disabled={!ble.wsConnected}, which is correct, but a tooltip would help."
+  ],
+  "updated_files": ["/app/backend/tests/test_spectator_label_scoping.py (new)"],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% (all 3 targeted flows pass)"},
+  "seed_data_creation": "Created view-only code label TEST_Alice21/TEST_Alice21b via the admin form; TEST_Alice21b deleted via DELETE /api/codes/{id} (200). TEST_Alice21 from the aborted first run and the reusable Spectator code ZYYM2N remain in the codes list.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 — worked",
+  "context_for_next_testing_agent": "Login testids: login-email/login-password/login-submit. Admin owner ReactionBar lives inside the card under [data-testid='obs-stream-with-reactions']; guest bar is the same component. Floating emojis unmount ~2.4-3s after appearing, so always wait 3.5s before asserting resurrection. Copied spectator URL points at public_url (tg30.ddns.net) — always open guest pages on the preview origin. Leftover codes to clean: TEST_Alice21 (view-only).",
+  "rca_of_the_issue": "Iteration_20 resurrect bug is resolved: FloatingReactions now dedupes against a useRef(new Set()) of ever-seen ids instead of the `visible` state, so an id removed by onAnimationEnd can never be re-mounted when the parent's capped reactions array changes identity. Verified empirically (3 sequential sends, each after full fade-out, always exactly 1 element) on both admin and guest."
+}

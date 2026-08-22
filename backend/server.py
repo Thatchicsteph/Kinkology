@@ -311,6 +311,34 @@ class Hub:
 
     TYPING_TTL_S = 4.0
 
+    # Reactions rate limit: at most one burst per 400ms per client so a
+    # spammer can't flood the room. Emojis are whitelisted server-side.
+    REACTION_MIN_GAP_S = 0.4
+    REACTION_WHITELIST = {"🔥", "💦", "😩", "👏", "😈", "💜", "🍑", "❤️"}
+
+    async def broadcast_reaction(self, cid: Optional[str], emoji: str) -> None:
+        """Relay a single reaction emoji to everyone (owner + all guests).
+        `cid` is None when the owner reacts. Rate-limited per-sender using
+        the same `chat_last_sent` map so both channels share one bucket.
+        """
+        if emoji not in self.REACTION_WHITELIST:
+            return
+        key = cid or "owner"
+        now = time.monotonic()
+        last = self.chat_last_sent.get(f"react:{key}", 0.0)
+        if now - last < self.REACTION_MIN_GAP_S:
+            return
+        self.chat_last_sent[f"react:{key}"] = now
+        if cid:
+            client = self.clients.get(cid)
+            label = ("Guest" if client and client.get("auto_label") else (client["label"] if client else "Guest"))
+        else:
+            label = "Owner"
+        payload = {"type": "reaction", "id": secrets.token_hex(4), "emoji": emoji, "author": label, "ts": now}
+        await self.send_to_host(payload)
+        for c in list(self.clients.values()):
+            await self._send(c["ws"], payload)
+
     def _current_typers(self) -> List[str]:
         """Labels of clients whose last typing ping is still fresh."""
         now = time.monotonic()
@@ -910,6 +938,38 @@ async def list_codes(user: dict = Depends(get_current_user)):
     docs = await db.access_codes.find().sort("created_at", -1).to_list(500)
     return [code_public(d) for d in docs]
 
+
+@api_router.post("/codes/spectator-link")
+async def spectator_link(user: dict = Depends(get_current_user)):
+    """Return a persistent, sharable view-only URL for the current owner.
+    Reuses the most recent non-revoked view-only code; creates one if none
+    exists. Called by the "Share Spectator Link" button on the admin
+    dashboard so the owner can copy a stream URL to their clipboard in one
+    click without hand-crafting a code."""
+    doc = await db.access_codes.find_one(
+        {"view_only": True, "revoked": {"$ne": True}, "label": "Spectator"},
+        sort=[("created_at", -1)],
+    )
+    if not doc:
+        code = gen_code()
+        while await db.access_codes.find_one({"code": code}):
+            code = gen_code()
+        doc = {
+            "code": code,
+            "label": "Spectator",
+            "granted_seconds": 0,
+            "used_seconds": 0,
+            "revoked": False,
+            "view_only": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_used_at": None,
+        }
+        res = await db.access_codes.insert_one(doc)
+        doc["_id"] = res.inserted_id
+        await log_event("security", "code_created", actor=user["email"], target=code,
+                        detail={"minutes": 0, "label": "Spectator", "view_only": True, "source": "spectator_link"})
+    return code_public(doc)
+
 def parse_object_id(code_id: str) -> ObjectId:
     try:
         return ObjectId(code_id)
@@ -1139,6 +1199,8 @@ async def ws_host(ws: WebSocket):
             elif t == "typing":
                 async with hub.lock:
                     await hub.mark_typing("owner")
+            elif t == "reaction":
+                await hub.broadcast_reaction(None, str(data.get("emoji", "")))
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -1200,6 +1262,8 @@ async def ws_control(ws: WebSocket, code: str):
             elif t == "typing":
                 async with hub.lock:
                     await hub.mark_typing(cid)
+            elif t == "reaction":
+                await hub.broadcast_reaction(cid, str(data.get("emoji", "")))
     except WebSocketDisconnect:
         pass
     except Exception:
