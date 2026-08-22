@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Cloud, CloudOff, ShieldCheck, Trash2, Loader2, ExternalLink } from "lucide-react";
+import { Cloud, CloudOff, ShieldCheck, Trash2, Loader2, ExternalLink, Pencil, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -19,6 +19,7 @@ export function CloudflareTurnCard() {
   const [saving, setSaving] = useState(false);
   const [keyId, setKeyId] = useState("");
   const [token, setToken] = useState("");
+  const [editing, setEditing] = useState(false);
 
   const load = async () => {
     try {
@@ -43,6 +44,7 @@ export function CloudflareTurnCard() {
       setStatus(data);
       setToken(""); // never keep the secret in component state longer than needed
       setKeyId("");
+      setEditing(false);
       toast.success("Cloudflare TURN active — mobile viewers can now connect over 4G/5G");
     } catch (err) {
       const msg = err?.response?.data?.detail || "Cloudflare rejected the credentials";
@@ -92,7 +94,7 @@ export function CloudflareTurnCard() {
         <div className="flex items-center justify-center py-6">
           <Loader2 className="animate-spin text-[var(--kink-purple)]" size={20} />
         </div>
-      ) : status.configured ? (
+      ) : status.configured && !editing ? (
         <div className="space-y-4">
           <div>
             <span className="font-display text-[10px] tracking-[0.2em] text-[var(--kink-muted)] block mb-1">TURN KEY ID</span>
@@ -100,14 +102,24 @@ export function CloudflareTurnCard() {
               {status.key_id_masked}
             </code>
           </div>
-          <button
-            onClick={remove}
-            disabled={saving}
-            data-testid="cf-turn-remove"
-            className="inline-flex items-center gap-1.5 border border-[var(--kink-overlay)] px-3 py-2 font-mono-data text-[11px] hover:border-[var(--kink-danger)] hover:text-[var(--kink-danger)] transition-colors disabled:opacity-40"
-          >
-            <Trash2 size={13} /> REMOVE
-          </button>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => { setEditing(true); setKeyId(""); setToken(""); }}
+              disabled={saving}
+              data-testid="cf-turn-replace"
+              className="inline-flex items-center gap-1.5 border border-[var(--kink-overlay)] px-3 py-2 font-mono-data text-[11px] hover:border-[var(--kink-purple)] hover:text-[var(--kink-purple)] transition-colors disabled:opacity-40"
+            >
+              <Pencil size={13} /> REPLACE
+            </button>
+            <button
+              onClick={remove}
+              disabled={saving}
+              data-testid="cf-turn-remove"
+              className="inline-flex items-center gap-1.5 border border-[var(--kink-overlay)] px-3 py-2 font-mono-data text-[11px] hover:border-[var(--kink-danger)] hover:text-[var(--kink-danger)] transition-colors disabled:opacity-40"
+            >
+              <Trash2 size={13} /> REMOVE
+            </button>
+          </div>
         </div>
       ) : (
         <form onSubmit={save} className="space-y-3" data-testid="cf-turn-form">
@@ -150,14 +162,27 @@ export function CloudflareTurnCard() {
               required
             />
           </div>
-          <button
-            type="submit"
-            disabled={saving || !keyId.trim() || !token.trim()}
-            data-testid="cf-turn-save"
-            className="w-full bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.1em] py-2.5 active:scale-95 transition-transform disabled:opacity-40 inline-flex items-center justify-center gap-2"
-          >
-            {saving ? <><Loader2 className="animate-spin" size={14} /> TESTING…</> : <><ShieldCheck size={14} /> SAVE & TEST</>}
-          </button>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              type="submit"
+              disabled={saving || !keyId.trim() || !token.trim()}
+              data-testid="cf-turn-save"
+              className="flex-1 bg-[var(--kink-purple)] text-[var(--kink-base)] font-display font-bold tracking-[0.1em] py-2.5 active:scale-95 transition-transform disabled:opacity-40 inline-flex items-center justify-center gap-2"
+            >
+              {saving ? <><Loader2 className="animate-spin" size={14} /> TESTING…</> : <><ShieldCheck size={14} /> {editing ? "REPLACE & TEST" : "SAVE & TEST"}</>}
+            </button>
+            {editing && (
+              <button
+                type="button"
+                onClick={() => { setEditing(false); setKeyId(""); setToken(""); }}
+                disabled={saving}
+                data-testid="cf-turn-cancel"
+                className="inline-flex items-center gap-1.5 border border-[var(--kink-overlay)] px-3 py-2 font-mono-data text-[11px] hover:border-[var(--kink-text-2)] hover:text-[var(--kink-text-2)] transition-colors disabled:opacity-40"
+              >
+                <X size={13} /> CANCEL
+              </button>
+            )}
+          </div>
         </form>
       )}
     </div>
