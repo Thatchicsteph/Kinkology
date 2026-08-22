@@ -411,6 +411,8 @@ async def whip_publish(request: Request) -> Response:
     # Advertise ICE candidates at the exact host the client used to reach us,
     # so OBS on the Mac gets `127.0.0.1` and LAN/remote clients get their host.
     answer_sdp = rewrite_answer_candidates(pc.localDescription.sdp, await _resolve_viewer_host(request))
+    _cands = [ln for ln in answer_sdp.splitlines() if ln.startswith("a=candidate:")]
+    logger.info("WHIP publisher %s answer SDP candidates (%d):\n  %s", sid, len(_cands), "\n  ".join(_cands) or "(none)")
     logger.info("WHIP publisher %s ready — Location=%s", sid, location)
 
     return Response(
