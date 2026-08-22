@@ -44,9 +44,12 @@ def _int_env(name: str) -> int:
         return 0
 
 
-UDP_MIN = _int_env("STREAM_UDP_MIN")
-UDP_MAX = _int_env("STREAM_UDP_MAX")
-PUBLIC_IP = (os.environ.get("STREAM_PUBLIC_IP") or "").strip()
+# Populated at apply() time (after load_dotenv), NOT at import time — otherwise
+# opt-in via backend/.env is silently ignored because server.py imports this
+# module before it calls load_dotenv().
+UDP_MIN = 0
+UDP_MAX = 0
+PUBLIC_IP = ""
 
 
 async def _patched_get_component_candidates(self, component, addresses, timeout=5):
@@ -154,9 +157,14 @@ _applied = False
 
 def apply() -> None:
     """Install the patch. Safe to call more than once."""
-    global _applied
+    global _applied, UDP_MIN, UDP_MAX, PUBLIC_IP
     if _applied:
         return
+    # Read env here (not at import) so callers can rely on load_dotenv having run.
+    UDP_MIN = _int_env("STREAM_UDP_MIN")
+    UDP_MAX = _int_env("STREAM_UDP_MAX")
+    PUBLIC_IP = (os.environ.get("STREAM_PUBLIC_IP") or "").strip()
+
     # H.264 codec widening is ALWAYS applied — it doesn't depend on the docker
     # NAT env vars and fixes the "Failed to set remote video description send
     # parameters" error we see with OBS Apple VT / high-profile publishers.

@@ -253,14 +253,3 @@ class TestWhepWithStun:
             assert r.status_code == 201, f"{r.status_code} {r.text[:200]}"
         print(f"5 concurrent WHEP wall clock: {elapsed:.2f}s")
         assert elapsed < 3.5, f"concurrent WHEP took {elapsed:.2f}s (blocking?)"
-
-
-# --------------------------------------------- docker-compose UDP range bump
-class TestComposeUdpRange:
-    def test_udp_range_widened(self):
-        src = open("/app/docker-compose.yml").read()
-        assert "50019" not in src, "old narrow UDP range (50019) still present"
-        assert "STREAM_UDP_MAX: ${STREAM_UDP_MAX:-50099}" in src, \
-            "STREAM_UDP_MAX default not bumped to 50099"
-        assert '"${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50099}:' in src, \
-            "published UDP ports: range not bumped to match STREAM_UDP_MAX"

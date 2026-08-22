@@ -15,18 +15,19 @@ services:
       DB_NAME: kinkology
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (copy env.docker.example to .env)}
-      # WebRTC (OBS -> browser) needs a reachable UDP port range from the host.
-      # Publish the same range in `ports:` below and advertise a host-reachable
-      # IP so ICE actually connects instead of hanging in "connecting".
-      STREAM_UDP_MIN: ${STREAM_UDP_MIN:-50000}
-      STREAM_UDP_MAX: ${STREAM_UDP_MAX:-50099}
+      # WebRTC direct-UDP fallbacks — leave blank to route mobile viewers via
+      # Cloudflare TURN relay (recommended, works over any NAT/carrier). Only
+      # opt into these if you know your network can do direct UDP (same-LAN
+      # phones, or router with UDP port forwarding). Setting them enables the
+      # aioice port-range + host-IP rewrite patch which is untested against
+      # every TURN client and can break Cloudflare relay for mobile viewers.
+      STREAM_UDP_MIN: ${STREAM_UDP_MIN:-}
+      STREAM_UDP_MAX: ${STREAM_UDP_MAX:-}
       # STUN servers (comma-separated). Defaults to Google + Cloudflare public
       # STUN; override in .env only if you need private/self-hosted STUN.
       STREAM_STUN_SERVERS: ${STREAM_STUN_SERVERS:-}
-      # Optional TURN relay for mobile clients behind symmetric NAT / CGNAT
-      # (most 4G/5G carriers). Without this, direct WebRTC fails on those
-      # networks. Bring your own TURN (e.g. Twilio, Cloudflare, self-hosted
-      # coturn) or leave blank to disable.
+      # Optional STATIC TURN relay if you're not using the built-in Cloudflare
+      # Calls one-click. Leave blank to use the admin UI card instead.
       STREAM_TURN_URL: ${STREAM_TURN_URL:-}
       STREAM_TURN_USERNAME: ${STREAM_TURN_USERNAME:-}
       STREAM_TURN_PASSWORD: ${STREAM_TURN_PASSWORD:-}
@@ -35,18 +36,15 @@ services:
       # print(Fernet.generate_key().decode())". Leaving it blank means saved
       # Cloudflare credentials don't survive a restart.
       TURN_CREDENTIAL_ENCRYPTION_KEY: ${TURN_CREDENTIAL_ENCRYPTION_KEY:-}
-      # 127.0.0.1 works when OBS runs on the same Mac as Docker. For LAN OBS,
-      # set this to the Mac's LAN IP (e.g., 192.168.1.42) in .env. For remote
-      # OBS behind a public domain, set it to the public IP / DDNS host.
-      STREAM_PUBLIC_IP: ${STREAM_PUBLIC_IP:-127.0.0.1}
-      # For same-Mac OBS, its host candidates are 127.0.0.1 which the container
-      # can't reach on the loopback interface. Rewrite them to something the
-      # container CAN reach; on Docker Desktop that's `host.docker.internal`.
-      STREAM_PEER_IP: ${STREAM_PEER_IP:-host.docker.internal}
-    ports:
-      # Publish the WebRTC UDP port range to the host so OBS can send RTP in.
-      # If you change STREAM_UDP_MIN/MAX in .env, change these too.
-      - "${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50099}:${STREAM_UDP_MIN:-50000}-${STREAM_UDP_MAX:-50099}/udp"
+      # Advertised host IP in ICE candidates — leave blank to let aioice
+      # pick from real interfaces (works when Cloudflare TURN relays traffic).
+      STREAM_PUBLIC_IP: ${STREAM_PUBLIC_IP:-}
+      STREAM_PEER_IP: ${STREAM_PEER_IP:-}
+    # ports:
+      # Publish the WebRTC UDP port range only if you enabled STREAM_UDP_MIN/MAX
+      # above AND set matching values in .env. Otherwise ICE runs via Cloudflare
+      # TURN and needs no host-side UDP publishing.
+      # - "50000-50099:50000-50099/udp"
     depends_on:
       - mongo
     networks:

@@ -85,5 +85,8 @@ Self-hosted Docker has NO seeded admin — owner creates it via first-run setup.
 - **P2**: Usage history/audit log per code; scheduled/one-time codes; QR code for share links.
 - **P2**: Funscript player relay (`stream:pos:time`) — firmware already supports it.
 
+## Implemented (2026-02-01)
+- **stream_patch env-loading fix (P0)**: `/app/backend/stream_patch.py` now reads `STREAM_UDP_MIN/MAX/STREAM_PUBLIC_IP` *inside* `apply()` instead of at import time. `server.py` reordered so `load_dotenv()` + `logging.basicConfig()` run BEFORE `stream_patch.apply()`, so the opt-in escape hatch documented for local/preview environments actually takes effect and its state now appears in supervisor logs. Cleaned up the null `ports:` key in `docker-compose.yml` (now fully commented) to avoid Compose schema validation errors. Removed the stale `TestComposeUdpRange` unit test that contradicted the iteration-19 design decision. Verified: all 25 stream/patch pytests pass and the full E2E `test_patch_noop_cf_relay.py` (Parts A/B/C) exits 0 — opt-in host candidates now bind to configured ports (127.0.0.1:50000 with `STREAM_UDP_MIN=50000/MAX=50003`).
+
 ## Notes / Limitations
 - Actual BLE motion control can ONLY be exercised with a real OSSM (firmware v3+) and a Web Bluetooth-capable browser (Chrome/Edge/Opera) physically near the device. Not testable in this cloud preview — protocol is implemented per firmware source.

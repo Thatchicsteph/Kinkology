@@ -26,6 +26,15 @@ import csv
 import json
 from io import BytesIO, StringIO
 
+# Load env BEFORE importing modules that read env at import/apply time (e.g. stream_patch).
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+# Initialise logging BEFORE stream_patch.apply() so operators see the
+# "patch active / aioice untouched" line in supervisor logs.
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("ossm-bridge")
+
 from stream import router as stream_router, shutdown as stream_shutdown, set_publish_token_provider, set_extra_ice_provider, _log_ice_config
 import stream_patch
 import cloudflare_turn
@@ -33,9 +42,6 @@ import cloudflare_turn
 # Install aioice NAT/Docker patch BEFORE any RTCPeerConnection is created.
 stream_patch.apply()
 _log_ice_config()
-
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -45,9 +51,6 @@ JWT_ALGORITHM = "HS256"
 
 app = FastAPI(title="Kinkology API")
 api_router = APIRouter(prefix="/api")
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("ossm-bridge")
 
 # ------------------------------------------------------------------
 # OSSM BLE command validation (mirrors firmware regex)

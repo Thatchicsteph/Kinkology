@@ -1,0 +1,58 @@
+{
+  "summary": "Backend-only verification of iteration 19 (drop docker-compose STREAM_UDP_MIN/MAX/PUBLIC_IP defaults so aioice runs native STUN/TURN gathering). Wrote 10 pytest cases (/app/backend/tests/test_stream_patch_optin.py) covering patch no-op-by-default, opt-in install, functional candidate gathering with the patch, server bootstrap order and docker-compose schema; plus a new E2E (/app/tests/test_patch_noop_cf_relay.py) that runs a hit-counting mock Cloudflare TURN endpoint (port 9739 + CF_TURN_ENDPOINT in backend/.env, restored afterwards), publishes with aiortc /api/whip and subscribes with /api/whep, and re-checks the SDP host rewrite. RESULTS: (1) patch is a verified NO-OP by default (UDP_MIN/MAX==0, PUBLIC_IP=='', aioice Connection.get_component_candidates untouched); (3) Cloudflare TURN relay path works with the patch disabled - /api/whip and /api/whep both 201, CF mock hit exactly twice (once per backend PC), answer SDP carries native aioice candidates (host 127.0.0.1 + srflx 104.198.214.223 via STUN); (4) docker-compose no longer publishes a UDP range and defaults all four STREAM_* vars to blank; (5) regression: WHEP with Host: 192.168.99.99 still rewrites typ host candidates; (6) regression: all 5 legacy E2E suites (test_whip_whep, test_whip_auth, test_chat_and_lock, test_toy_relay, test_cloudflare_turn) exit 0. FAILED: (2) OPT-IN VIA backend/.env DOES NOT WORK - server.py calls stream_patch.apply() at line 34 but load_dotenv() only at line 38, so STREAM_UDP_MIN/MAX/PUBLIC_IP placed in backend/.env are ignored (candidate port was random 59805, not 50000-50003). The patch code itself is fine: with the vars in the real process env the gather test produced host candidates 127.0.0.1:50010-50013. Also found: docker-compose backend `ports:` key is now present but null (only comments under it), which docker compose can reject with 'ports must be a list'.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "server.py bootstrap / stream_patch opt-in",
+        "issue": "load_dotenv(ROOT_DIR/'.env') runs at line 38, AFTER `import stream_patch` (line 30) and `stream_patch.apply()` (line 34). stream_patch reads STREAM_UDP_MIN/MAX/STREAM_PUBLIC_IP at import time, so the documented opt-in via backend/.env is silently ignored (verified: patch never installed, host candidate bound to random port 59805 with STREAM_UDP_MIN=50000/MAX=50003/PUBLIC_IP=127.0.0.1 in .env). Move load_dotenv above the stream/stream_patch imports (or make stream_patch read env inside apply()).",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "/app/docker-compose.yml (backend.ports)",
+        "issue": "The `ports:` key is retained with only comments beneath it, so YAML parses it as null. Docker Compose validation rejects a null/non-list ports value ('services.backend.ports must be a list') on several versions - `docker compose up` may fail for self-hosters. Comment out the `ports:` key itself or use `ports: []`.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "stream_patch.apply() logging",
+        "issue": "apply() runs before logging.basicConfig() in server.py, so neither 'stream_patch: ... leaving aioice untouched' nor 'stream_patch active: ...' ever reaches the supervisor log (confirmed: 0 occurrences). Operators have no way to confirm whether the patch is active. Configure logging before apply(), or log the state again after basicConfig."
+      },
+      {
+        "endpoint": "ICE gathering (env observation, not a defect of this change)",
+        "issue": "In this preview container aioice's native gathering yields only ONE host candidate (127.0.0.1) plus one srflx - the pod's real 10.231.154.50 interface is not offered as a host candidate. Real mobile playback still depends on the srflx/TURN relay path; cannot be validated in this environment."
+      },
+      {
+        "endpoint": "POST /api/whip, POST /api/whep",
+        "issue": "Carried over from iteration 18 and still true: a Cloudflare TURN credential is minted on every PC creation (mock hit 2x for one publish+view) with httpx timeout=8s, under hub.lock on the WHIP path. Cache the 1h-valid creds."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_stream_patch_optin.py",
+    "/app/tests/test_patch_noop_cf_relay.py",
+    "/app/test_reports/pytest/iter19_patch_optin.xml"
+  ],
+  "action_items": [
+    "Move load_dotenv(ROOT_DIR/'.env') above `from stream import ...` / `import stream_patch` / `stream_patch.apply()` in server.py so the documented STREAM_UDP_MIN/MAX/STREAM_PUBLIC_IP opt-in via backend/.env actually takes effect (docker env-var opt-in works today, .env does not).",
+    "Comment out (or set to []) the now-empty `ports:` key under the backend service in docker-compose.yml - a null ports value can fail Compose schema validation.",
+    "Initialise logging before stream_patch.apply() so the 'patch active / aioice untouched' line is visible in logs for field debugging."
+  ],
+  "critical_code_review_comments": [
+    "stream_patch reads env at module import time; combined with server.py's late load_dotenv this makes the feature flag order-dependent. Prefer reading env inside apply() and passing values explicitly.",
+    "docker-compose.yml: keep the UDP publish example inside the comment block only; a bare `ports:` key with no list items is invalid Compose config.",
+    "_patched_get_component_candidates still duplicates aioice's STUN/TURN block verbatim (and reuses `bind_addr` from the loop for the IPv4 check, which is a latent bug when multiple addresses are gathered) - fine while opt-in, but worth deleting or narrowing to just a port-range/host override hook."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_stream_patch_optin.py (new)",
+    "/app/tests/test_patch_noop_cf_relay.py (new)"
+  ],
+  "success_rate": {"backend": "88% (8/10 new pytest cases, 11/13 E2E checks, 5/5 legacy suites)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "None persistent. Temporary CF_TURN_ENDPOINT + STREAM_UDP_* lines appended to /app/backend/.env during E2E and restored; Cloudflare TURN config deleted via API afterwards. backend/.env verified clean and /api/ returns 200.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@ossm.local / ossm-admin-2026 (from /app/memory/test_credentials.md) - worked",
+  "context_for_next_testing_agent": "Re-run `python /app/tests/test_patch_noop_cf_relay.py` (exits 1 today, Part C fails) and `pytest /app/backend/tests/test_stream_patch_optin.py` after the load_dotenv reorder + compose ports fix; both encode the expected behaviour. Parts A/B of the E2E (patch no-op + CF mint per PC + host rewrite) already pass and are the regression guard. Note the E2E restarts the backend 3x and always restores backend/.env in a finally block.",
+  "rca_of_the_issue": "The aioice patch is confirmed inert by default now (get_component_candidates is the original method), and Cloudflare TURN creds are minted for each backend PC on /api/whip and /api/whep with native aioice host+srflx candidates in the answer, so the suspected patch interference with mobile ICE is removed. Remaining defect: because server.py imports/applies stream_patch before load_dotenv, the opt-in escape hatch documented in docker-compose comments cannot be enabled through backend/.env at all (only through real process env vars, which is how Docker sets them) - so behaviour in Docker is correct but local/preview opt-in is dead code."
+}
