@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, MessageSquare, Trash2 } from "lucide-react";
+import { Send, MessageSquare, Trash2, Users } from "lucide-react";
 
 /**
  * Realtime chat panel. The parent owns the WebSocket — this component just
@@ -8,6 +8,12 @@ import { Send, MessageSquare, Trash2 } from "lucide-react";
  *
  * Messages have shape:
  *   { id, author, role: "owner"|"guest", text, ts }
+ *
+ * `presence` (optional) is the latest server-emitted presence snapshot:
+ *   { owner_online: bool, guests: [{id,label}], typing: [label,...] }
+ *
+ * `onTyping()` is called (throttled) whenever the user is composing so the
+ * parent can send a `typing` message on the WebSocket.
  *
  * Rendered by BOTH the admin dashboard (owner) and the guest control page.
  * Guests can't clear the log — only the owner sees the trash icon.
@@ -20,10 +26,13 @@ export function ChatPanel({
   selfLabel = "You",
   compact = false,
   title = "CHAT",
+  presence = null,
+  onTyping,
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const scrollRef = useRef(null);
+  const lastTypingSentAt = useRef(0);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -69,6 +78,30 @@ export function ChatPanel({
         )}
       </div>
 
+      {presence && (
+        <div
+          data-testid="chat-presence-bar"
+          className="mb-2 flex flex-wrap items-center gap-2 font-mono-data text-[10px] tracking-wide"
+        >
+          <Users size={11} className="text-[var(--kink-muted)]" />
+          <span
+            data-testid="chat-presence-owner"
+            className={presence.owner_online ? "text-[var(--kink-purple)]" : "text-[var(--kink-muted)] opacity-60"}
+          >
+            {presence.owner_online ? "● Owner" : "○ Owner offline"}
+          </span>
+          {(presence.guests || []).length === 0 ? (
+            <span className="text-[var(--kink-muted)] opacity-60">no guests</span>
+          ) : (
+            (presence.guests || []).map((g) => (
+              <span key={g.id} data-testid={`chat-presence-guest-${g.id}`} className="text-[var(--kink-text-2)]">
+                ● {g.label}
+              </span>
+            ))
+          )}
+        </div>
+      )}
+
       <div
         ref={scrollRef}
         data-testid="chat-messages"
@@ -97,10 +130,35 @@ export function ChatPanel({
         )}
       </div>
 
+      {presence && Array.isArray(presence.typing) && presence.typing.filter((n) => n !== selfLabel).length > 0 && (
+        <div
+          data-testid="chat-typing-indicator"
+          className="mt-2 flex items-center gap-2 font-mono-data text-[10px] text-[var(--kink-muted)]"
+        >
+          <span>{presence.typing.filter((n) => n !== selfLabel).join(", ")} typing</span>
+          <span className="inline-flex gap-0.5" aria-hidden="true">
+            <span className="chat-typing-dot" />
+            <span className="chat-typing-dot" style={{ animationDelay: "120ms" }} />
+            <span className="chat-typing-dot" style={{ animationDelay: "240ms" }} />
+          </span>
+        </div>
+      )}
+
       <form onSubmit={submit} className="mt-3 flex items-stretch gap-2">
         <input
           value={text}
-          onChange={(e) => setText(e.target.value.slice(0, 250))}
+          onChange={(e) => {
+            const next = e.target.value.slice(0, 250);
+            setText(next);
+            // Throttle typing pings to at most 1 per 1.5s (backend TTL is 4s).
+            if (next && onTyping) {
+              const now = Date.now();
+              if (now - lastTypingSentAt.current > 1500) {
+                lastTypingSentAt.current = now;
+                try { onTyping(); } catch { /* noop */ }
+              }
+            }
+          }}
           data-testid="chat-input"
           placeholder={`Say something as ${selfLabel}…`}
           maxLength={250}

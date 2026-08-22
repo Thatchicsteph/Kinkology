@@ -117,3 +117,17 @@ body::before {
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--kink-base); }
 ::-webkit-scrollbar-thumb { background: var(--kink-overlay); border-radius: 4px; }
+
+/* Chat typing indicator dots — used by ChatPanel.jsx. */
+.chat-typing-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  background: var(--kink-purple);
+  border-radius: 50%;
+  animation: chat-typing-bounce 900ms infinite ease-in-out;
+}
+@keyframes chat-typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30%           { transform: translateY(-3px); opacity: 1; }
+}

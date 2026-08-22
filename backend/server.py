@@ -302,7 +302,56 @@ class Hub:
         self.chat_msgs: List[dict] = []
         # Per-sender rate limit: 1 message / 1s minimum gap.
         self.chat_last_sent: Dict[str, float] = {}
+        # Presence: last-typing-at monotonic timestamps. Owner uses key "owner";
+        # guests use their client id. A guest is "typing" if last-typing-at is
+        # within TYPING_TTL_S seconds. Presence changes are broadcast to all.
+        self.typing_at: Dict[str, float] = {}
         self.lock = asyncio.Lock()
+
+    TYPING_TTL_S = 4.0
+
+    def _current_typers(self) -> List[str]:
+        """Labels of clients whose last typing ping is still fresh."""
+        now = time.monotonic()
+        cutoff = now - self.TYPING_TTL_S
+        labels: List[str] = []
+        for cid, ts in list(self.typing_at.items()):
+            if ts < cutoff:
+                # Expired — drop lazily.
+                self.typing_at.pop(cid, None)
+                continue
+            if cid == "owner":
+                labels.append("Owner")
+            else:
+                client = self.clients.get(cid)
+                if client:
+                    labels.append(client["label"])
+        return labels
+
+    def _presence_payload(self) -> dict:
+        return {
+            "type": "presence",
+            "owner_online": self.host_ws is not None,
+            # Only expose the display label — never raw access codes for
+            # auto-labelled clients (same rule the queue broadcast follows).
+            "guests": [
+                {"id": cid, "label": ("Guest" if c.get("auto_label") else c["label"])}
+                for cid, c in self.clients.items()
+            ],
+            "typing": self._current_typers(),
+        }
+
+    async def broadcast_presence(self) -> None:
+        payload = self._presence_payload()
+        await self.send_to_host(payload)
+        for c in list(self.clients.values()):
+            await self._send(c["ws"], payload)
+
+    async def mark_typing(self, cid: str) -> None:
+        """Record that `cid` (or 'owner') is typing right now, and broadcast
+        the updated presence payload so everyone sees the dots."""
+        self.typing_at[cid] = time.monotonic()
+        await self.broadcast_presence()
 
     def _update_motion(self, speed: int):
         now = time.monotonic()
@@ -478,6 +527,7 @@ class Hub:
             self.queue.append(cid)
         await log_event("session", "guest_joined", actor=f"guest:{label}", target=code)
         await self.promote()
+        await self.broadcast_presence()
 
     async def remove_client(self, cid: str):
         if cid in self.queue:
@@ -486,6 +536,8 @@ class Hub:
             await self.end_active("disconnected")
             await self.promote()
         self.clients.pop(cid, None)
+        self.typing_at.pop(cid, None)
+        await self.broadcast_presence()
 
     async def handle_command(self, cid: str, cmd: str):
         if cid != self.active_id:
@@ -1003,6 +1055,7 @@ async def ws_host(ws: WebSocket):
     await hub._send(ws, {"type": "toys_lock", "locked": hub.toys_locked})
     await hub._send(ws, {"type": "chat_history", "messages": hub.chat_msgs})
     await hub.broadcast()
+    await hub.broadcast_presence()
     try:
         while True:
             data = await ws.receive_json()
@@ -1048,7 +1101,12 @@ async def ws_host(ws: WebSocket):
                 await hub.broadcast()
             elif t == "chat":
                 async with hub.lock:
+                    hub.typing_at.pop("owner", None)
                     await hub.handle_owner_chat(str(data.get("text", "")))
+                await hub.broadcast_presence()
+            elif t == "typing":
+                async with hub.lock:
+                    await hub.mark_typing("owner")
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -1058,8 +1116,10 @@ async def ws_host(ws: WebSocket):
             hub.host_ws = None
             hub.toys_available = False
             hub.toys_pattern = None
+            hub.typing_at.pop("owner", None)
             await log_event("session", "device_disconnected", actor="owner")
         await hub.broadcast()
+        await hub.broadcast_presence()
 
 @app.websocket("/api/ws/control/{code}")
 async def ws_control(ws: WebSocket, code: str):
@@ -1081,6 +1141,7 @@ async def ws_control(ws: WebSocket, code: str):
     # Seed the newly-joined guest with the current chat history so they don't
     # arrive to an empty pane while everyone else is mid-conversation.
     await hub._send(ws, {"type": "chat_history", "messages": hub.chat_msgs})
+    await hub._send(ws, hub._presence_payload())
     try:
         while True:
             data = await ws.receive_json()
@@ -1092,7 +1153,12 @@ async def ws_control(ws: WebSocket, code: str):
                     await hub.handle_toy_command(cid, str(data.get("cmd", "")))
             elif data.get("type") == "chat":
                 async with hub.lock:
+                    hub.typing_at.pop(cid, None)
                     await hub.handle_guest_chat(cid, str(data.get("text", "")))
+                await hub.broadcast_presence()
+            elif data.get("type") == "typing":
+                async with hub.lock:
+                    await hub.mark_typing(cid)
     except WebSocketDisconnect:
         pass
     except Exception:

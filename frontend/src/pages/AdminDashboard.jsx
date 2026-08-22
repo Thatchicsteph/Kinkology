@@ -45,6 +45,7 @@ export default function AdminDashboard() {
   });
   const [toysLocked, setToysLocked] = useState(false);
   const [chatMsgs, setChatMsgs] = useState([]);
+  const [presence, setPresence] = useState(null);
   const ble = useBleHost({
     onCommand: toys.handleCommand,
     onToyCommand: toys.applyRemoteCommand,
@@ -55,6 +56,7 @@ export default function AdminDashboard() {
     onChatHistory: (msgs) => setChatMsgs(msgs),
     onChatMsg: (m) => setChatMsgs((prev) => [...prev, m].slice(-50)),
     onChatCleared: () => setChatMsgs([]),
+    onPresence: (p) => setPresence(p),
   });
   bleRef.current = ble;
   const hr = useHeartRate();
@@ -297,6 +299,8 @@ export default function AdminDashboard() {
                 canClear
                 selfLabel="Owner"
                 title="SESSION CHAT"
+                presence={presence}
+                onTyping={() => ble.sendHostMessage({ type: "typing" })}
               />
             </div>
           </div>

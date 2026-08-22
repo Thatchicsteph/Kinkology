@@ -34,6 +34,7 @@ export default function GuestControl() {
   const [meta, setMeta] = useState(null);
   const [snap, setSnap] = useState({ you: null, active: null, queue: [], host_connected: false });
   const [chatMsgs, setChatMsgs] = useState([]);
+  const [presence, setPresence] = useState(null);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -67,6 +68,7 @@ export default function GuestControl() {
       if (msg.type === "chat_history") setChatMsgs(msg.messages || []);
       if (msg.type === "chat_msg") setChatMsgs((prev) => [...prev, msg.message].slice(-50));
       if (msg.type === "chat_cleared") setChatMsgs([]);
+      if (msg.type === "presence") setPresence(msg);
     };
     ws.onclose = () => setPhase((p) => (p === "ended" || p === "invalid" ? p : "ended"));
     ws.onerror = () => {};
@@ -87,6 +89,12 @@ export default function GuestControl() {
   const sendChat = (text) => {
     if (wsRef.current && wsRef.current.readyState === 1) {
       wsRef.current.send(JSON.stringify({ type: "chat", text }));
+    }
+  };
+
+  const sendTyping = () => {
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "typing" }));
     }
   };
 
@@ -166,6 +174,8 @@ export default function GuestControl() {
                 selfLabel={snap.label || "Guest"}
                 title="CHAT"
                 compact
+                presence={presence}
+                onTyping={sendTyping}
               />
             </div>
           </div>
@@ -195,6 +205,8 @@ export default function GuestControl() {
               selfLabel={snap.label || "You"}
               title="CHAT"
               compact
+              presence={presence}
+              onTyping={sendTyping}
             />
           </div>
         </div>

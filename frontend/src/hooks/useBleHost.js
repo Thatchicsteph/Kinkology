@@ -3,7 +3,7 @@ import { WS_BASE, API } from "@/lib/api";
 import { OSSM } from "@/lib/ossm";
 import { toast } from "sonner";
 
-export function useBleHost({ onCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared } = {}) {
+export function useBleHost({ onCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared, onPresence } = {}) {
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [wsConnected, setWsConnected] = useState(false);
@@ -61,10 +61,12 @@ export function useBleHost({ onCommand, onToyCommand, onToysLock, onChatMsg, onC
           try { onChatMsg(msg.message); } catch (e) {}
         } else if (msg.type === "chat_cleared" && onChatCleared) {
           try { onChatCleared(); } catch (e) {}
+        } else if (msg.type === "presence" && onPresence) {
+          try { onPresence(msg); } catch (e) {}
         }
       } catch (e) {}
     };
-  }, [writeCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared]);
+  }, [writeCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared, onPresence]);
 
   const closeHostWs = useCallback(() => {
     if (wsRef.current) {

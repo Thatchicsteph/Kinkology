@@ -20,6 +20,7 @@ export function BrowserPublisher() {
   const [bitrateKbps, setBitrateKbps] = useState(0);
   const bitrateTimerRef = useRef(null);
   const lastStatsRef = useRef({ bytes: 0, ts: 0 });
+  const iceRefreshTimerRef = useRef(null);
 
   useEffect(() => {
     return () => { void stop(); };
@@ -28,6 +29,7 @@ export function BrowserPublisher() {
 
   const cleanup = async () => {
     if (bitrateTimerRef.current) { clearInterval(bitrateTimerRef.current); bitrateTimerRef.current = null; }
+    if (iceRefreshTimerRef.current) { clearInterval(iceRefreshTimerRef.current); iceRefreshTimerRef.current = null; }
     if (pcRef.current) {
       try { pcRef.current.getSenders().forEach(s => { try { s.track && s.track.stop(); } catch { /* noop */ } }); } catch { /* noop */ }
       try { pcRef.current.close(); } catch { /* noop */ }
@@ -135,6 +137,35 @@ export function BrowserPublisher() {
         }
         lastStatsRef.current = { bytes, ts: now };
       }, 1000);
+
+      // Cloudflare TURN allocations expire at ~600s and creds are typically
+      // valid for 1h. Refresh both every 9 minutes and trigger an ICE restart
+      // so long-running sessions never drop when the current allocation dies.
+      iceRefreshTimerRef.current = setInterval(async () => {
+        try {
+          if (!pcRef.current) return;
+          const { data } = await api.get("/stream/ice-servers");
+          const fresh = (data && data.iceServers) || [];
+          if (!fresh.length) return;
+          pcRef.current.setConfiguration({ iceServers: fresh });
+          pcRef.current.restartIce();
+          // Push the renegotiated offer back to the WHIP resource so aiortc
+          // sees the new ufrag/pwd and swaps its ICE agent state.
+          const offer = await pcRef.current.createOffer({ iceRestart: true });
+          await pcRef.current.setLocalDescription(offer);
+          await waitForIceGathering(pcRef.current, 2000);
+          const url = resourceUrlRef.current;
+          if (url) {
+            await fetch(url, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/sdp" },
+              body: pcRef.current.localDescription.sdp,
+            }).catch(() => { /* server may not support offer PATCH — best-effort */ });
+          }
+        } catch (e) {
+          console.warn("ICE refresh failed:", e);
+        }
+      }, 9 * 60 * 1000);
 
       toast.success("Live from browser");
     } catch (err) {
