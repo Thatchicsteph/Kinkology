@@ -297,19 +297,20 @@ def _build_ice_link_headers(extra: list) -> List[str]:
     entries: List[str] = []
 
     def _add(url: str, username: str = "", credential: str = "") -> None:
-        # Escape any embedded quotes per RFC 8288.
-        safe_u = username.replace('"', '\\"') if username else ""
-        safe_c = credential.replace('"', '\\"') if credential else ""
-        parts = [f'<{url}>', 'rel="ice-server"']
-        if username or credential:
-            parts.append(f'username="{safe_u}"')
-            parts.append(f'credential="{safe_c}"')
-            # NOTE: Do NOT emit `credential-type="password"`. Some WHIP clients
-            # (OBS 32.x libdatachannel) fail to construct the ICE server with
-            # "Invalid ICE server URL: credential-type=..." — they don't
-            # recognise the param and treat it as a bogus URL. The default
-            # credential type is already "password" per RFC 8839.
-        entries.append("; ".join(parts))
+        # OBS's libdatachannel-based WHIP parser doesn't understand
+        # `; username=...; credential=...` Link params (it treats them as
+        # extra ICE server URLs and fails). Embed credentials INSIDE the URL
+        # per libdatachannel's expected format: `turn:USER:PASS@host:port?transport=`.
+        # Non-TURN URLs (stun:) are left untouched.
+        if (username or credential) and url.lower().startswith(("turn:", "turns:")):
+            # URL-encode username & credential so `@`, `:`, `?`, `/` inside
+            # them don't break parsing.
+            from urllib.parse import quote
+            u_enc = quote(username, safe="")
+            c_enc = quote(credential, safe="")
+            scheme, rest = url.split(":", 1)
+            url = f"{scheme}:{u_enc}:{c_enc}@{rest}"
+        entries.append(f'<{url}>; rel="ice-server"')
 
     # Static STUN — same defaults as _ice_servers().
     stun_env = os.environ.get(
