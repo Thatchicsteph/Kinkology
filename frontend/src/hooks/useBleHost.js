@@ -3,7 +3,7 @@ import { WS_BASE, API } from "@/lib/api";
 import { OSSM } from "@/lib/ossm";
 import { toast } from "sonner";
 
-export function useBleHost({ onCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared, onPresence, onReaction } = {}) {
+export function useBleHost({ onCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared, onPresence, onReaction, onChatReact, onTheme } = {}) {
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [wsConnected, setWsConnected] = useState(false);
@@ -65,10 +65,14 @@ export function useBleHost({ onCommand, onToyCommand, onToysLock, onChatMsg, onC
           try { onPresence(msg); } catch (e) {}
         } else if (msg.type === "reaction" && onReaction) {
           try { onReaction(msg); } catch (e) {}
+        } else if (msg.type === "chat_react" && onChatReact) {
+          try { onChatReact(msg); } catch (e) {}
+        } else if (msg.type === "theme" && onTheme) {
+          try { onTheme(msg.theme); } catch (e) {}
         }
       } catch (e) {}
     };
-  }, [writeCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared, onPresence, onReaction]);
+  }, [writeCommand, onToyCommand, onToysLock, onChatMsg, onChatHistory, onChatCleared, onPresence, onReaction, onChatReact, onTheme]);
 
   const closeHostWs = useCallback(() => {
     if (wsRef.current) {

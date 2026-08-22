@@ -18,6 +18,8 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { FloatingReactions } from "@/components/FloatingReactions";
 import { ReactionBar } from "@/components/ReactionBar";
 import { ShareSpectatorLink } from "@/components/ShareSpectatorLink";
+import { ThemePicker } from "@/components/ThemePicker";
+import { applyTheme } from "@/components/ThemeSync";
 import { fmtTime } from "@/lib/api";
 import { webBluetoothSupported } from "@/lib/ossm";
 import { LogOut, Bluetooth, BluetoothConnected, Power, SkipForward, Plus, Copy, Trash2, Ban, Clock, Activity, Ticket, Sliders, Heart, Eye } from "lucide-react";
@@ -62,6 +64,8 @@ export default function AdminDashboard() {
     onChatCleared: () => setChatMsgs([]),
     onPresence: (p) => setPresence(p),
     onReaction: (r) => setReactions((prev) => [...prev.slice(-24), r]),
+    onChatReact: (msg) => setChatMsgs((prev) => prev.map((m) => (m.id === msg.msg_id ? { ...m, reactions: msg.reactions } : m))),
+    onTheme: (t) => applyTheme(t),
   });
   bleRef.current = ble;
   const hr = useHeartRate();
@@ -179,6 +183,7 @@ export default function AdminDashboard() {
 
   const sendChat = (text) => ble.sendHostMessage({ type: "chat", text });
   const sendReaction = (emoji) => ble.sendHostMessage({ type: "reaction", emoji });
+  const sendChatReact = (msgId, emoji) => ble.sendHostMessage({ type: "chat_react", msg_id: msgId, emoji });
   const clearChat = async () => {
     try { await api.delete("/session/chat"); toast("Chat cleared"); }
     catch (e) { toast.error("Could not clear chat"); }
@@ -313,6 +318,7 @@ export default function AdminDashboard() {
                 title="SESSION CHAT"
                 presence={presence}
                 onTyping={() => ble.sendHostMessage({ type: "typing" })}
+                onReact={sendChatReact}
               />
             </div>
           </div>
@@ -322,6 +328,7 @@ export default function AdminDashboard() {
         {/* Access codes */}
         <section className="space-y-6">
           <BrowserPublisher />
+          <ThemePicker />
           <ObsStreamSetup localUrl={urls.local_url} />
           <CloudflareTurnCard />
           <div className="hud-panel p-5 sm:p-6" data-testid="overlay-link-card">

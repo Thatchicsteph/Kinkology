@@ -8,6 +8,9 @@ import { GuestToys } from "@/components/GuestToys";
 import { ChatPanel } from "@/components/ChatPanel";
 import { FloatingReactions } from "@/components/FloatingReactions";
 import { ReactionBar } from "@/components/ReactionBar";
+import { NicknamePrompt } from "@/components/NicknamePrompt";
+import { SessionRecap } from "@/components/SessionRecap";
+import { applyTheme } from "@/components/ThemeSync";
 import { Loader2, XCircle, Clock, Users } from "lucide-react";
 import kinkologyMark from "@/assets/kinkology-mark.png";
 import { toast } from "sonner";
@@ -38,6 +41,11 @@ export default function GuestControl() {
   const [chatMsgs, setChatMsgs] = useState([]);
   const [presence, setPresence] = useState(null);
   const [reactions, setReactions] = useState([]);
+  const [nickname, setNickname] = useState(() => {
+    try { return window.sessionStorage.getItem(`kinkology_nick_${code}`) || ""; } catch (_) { return ""; }
+  });
+  const [needsNickname, setNeedsNickname] = useState(false);
+  const [recap, setRecap] = useState(null);
   const wsRef = useRef(null);
   const wsRetryRef = useRef({ attempt: 0, timer: null, cancelled: false });
 
@@ -58,14 +66,19 @@ export default function GuestControl() {
     // eslint-disable-next-line
   }, [code]);
 
+  // Show the nickname prompt on first WS state as long as the user hasn't
+  // already saved or skipped it for this code.
+  useEffect(() => {
+    if (!snap?.you) return;
+    let saved = "";
+    try { saved = window.sessionStorage.getItem(`kinkology_nick_${code}`) || ""; } catch (_) {}
+    if (!saved) setNeedsNickname(true);
+  }, [snap?.you, code]);
+
   const connectWs = () => {
     setPhase((p) => (p === "connecting" || p === "active" || p === "waiting" ? p : "connecting"));
     const ws = new WebSocket(`${WS_BASE}/api/ws/control/${code}`);
     wsRef.current = ws;
-    ws.onopen = () => {
-      // Reset retry backoff whenever the socket comes up cleanly.
-      wsRetryRef.current.attempt = 0;
-    };
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.type === "rejected") { setPhase("invalid"); return; }
@@ -91,9 +104,22 @@ export default function GuestControl() {
       }
       if (msg.type === "chat_history") setChatMsgs(msg.messages || []);
       if (msg.type === "chat_msg") setChatMsgs((prev) => [...prev, msg.message].slice(-50));
+      if (msg.type === "chat_react") {
+        setChatMsgs((prev) => prev.map((m) => (m.id === msg.msg_id ? { ...m, reactions: msg.reactions } : m)));
+      }
       if (msg.type === "chat_cleared") setChatMsgs([]);
       if (msg.type === "presence") setPresence(msg);
       if (msg.type === "reaction") setReactions((prev) => [...prev.slice(-24), msg]);
+      if (msg.type === "theme") applyTheme(msg.theme);
+      if (msg.type === "session_recap") setRecap(msg.recap);
+    };
+    ws.onopen = () => {
+      wsRetryRef.current.attempt = 0;
+      // If we already know a nickname (returning viewer, or user set it below),
+      // push it on every reconnect so the server label stays sticky.
+      if (nickname) {
+        try { ws.send(JSON.stringify({ type: "set_nickname", name: nickname })); } catch (_) {}
+      }
     };
     ws.onclose = () => {
       if (wsRetryRef.current.cancelled) return;
@@ -142,6 +168,26 @@ export default function GuestControl() {
     }
   };
 
+  const sendChatReact = (msgId, emoji) => {
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "chat_react", msg_id: msgId, emoji }));
+    }
+  };
+
+  const submitNickname = (name) => {
+    setNickname(name);
+    try { window.sessionStorage.setItem(`kinkology_nick_${code}`, name); } catch (_) {}
+    if (wsRef.current && wsRef.current.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "set_nickname", name }));
+    }
+    setNeedsNickname(false);
+  };
+
+  const skipNickname = () => {
+    try { window.sessionStorage.setItem(`kinkology_nick_${code}`, "__skipped__"); } catch (_) {}
+    setNeedsNickname(false);
+  };
+
   if (phase === "checking" || phase === "connecting" || phase === "reconnecting") {
     return (
       <Shell code={code}>
@@ -186,6 +232,7 @@ export default function GuestControl() {
   if (phase === "waiting") {
     const pos = snap.you?.position ?? 0;
     return (
+      <>
       <Shell code={code} wide>
         <div
           className="flex-1 grid gap-5 lg:gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:items-start"
@@ -228,11 +275,15 @@ export default function GuestControl() {
                 compact
                 presence={presence}
                 onTyping={sendTyping}
+                onReact={sendChatReact}
               />
             </div>
           </div>
         </div>
       </Shell>
+      {needsNickname && <NicknamePrompt onSubmit={submitNickname} onSkip={skipNickname} />}
+      {recap && <SessionRecap recap={recap} onClose={() => setRecap(null)} />}
+    </>
     );
   }
 
@@ -240,6 +291,7 @@ export default function GuestControl() {
   // layout as active but without the control console and toy remote.
   if (phase === "spectator" || snap.you?.status === "spectator") {
     return (
+      <>
       <Shell code={code} wide>
         <div
           className="fade-up grid gap-4 lg:gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:items-start"
@@ -273,16 +325,21 @@ export default function GuestControl() {
                 compact
                 presence={presence}
                 onTyping={sendTyping}
+                onReact={sendChatReact}
               />
             </div>
           </div>
         </div>
       </Shell>
+      {needsNickname && <NicknamePrompt onSubmit={submitNickname} onSkip={skipNickname} />}
+      {recap && <SessionRecap recap={recap} onClose={() => setRecap(null)} />}
+      </>
     );
   }
 
   // active
   return (
+    <>
     <Shell code={code} wide>
       <div className="fade-up grid gap-4 lg:gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] lg:items-start">
         <div className="space-y-4 lg:sticky lg:top-6">
@@ -308,6 +365,7 @@ export default function GuestControl() {
               compact
               presence={presence}
               onTyping={sendTyping}
+              onReact={sendChatReact}
             />
           </div>
         </div>
@@ -323,5 +381,8 @@ export default function GuestControl() {
         </div>
       </div>
     </Shell>
+    {needsNickname && <NicknamePrompt onSubmit={submitNickname} onSkip={skipNickname} />}
+    {recap && <SessionRecap recap={recap} onClose={() => setRecap(null)} />}
+    </>
   );
 }

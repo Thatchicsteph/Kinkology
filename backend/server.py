@@ -313,6 +313,12 @@ class Hub:
         # guests use their client id. A guest is "typing" if last-typing-at is
         # within TYPING_TTL_S seconds. Presence changes are broadcast to all.
         self.typing_at: Dict[str, float] = {}
+        # Per-client session stats accumulator (drives the end-of-turn recap
+        # sent to the guest when they get demoted). Keyed by client id.
+        # Shape: {"reactions": {emoji: count}, "chat_count": int,
+        #         "speed_samples": [int, ...], "started_at": monotonic,
+        #         "granted_seconds": int}
+        self.session_stats: Dict[str, dict] = {}
         self.lock = asyncio.Lock()
 
     TYPING_TTL_S = 4.0
@@ -346,6 +352,12 @@ class Hub:
         await self.send_to_host(payload)
         for c in list(self.clients.values()):
             await self._send(c["ws"], payload)
+        # Fold into the sender's session recap counter if they're the active
+        # guest — recap only cares about the person whose turn it is.
+        if cid and cid == self.active_id:
+            stats = self.session_stats.get(cid)
+            if stats is not None:
+                stats["reactions"][emoji] = stats["reactions"].get(emoji, 0) + 1
 
     def _current_typers(self) -> List[str]:
         """Labels of clients whose last typing ping is still fresh."""
@@ -383,6 +395,115 @@ class Hub:
         await self.send_to_host(payload)
         for c in list(self.clients.values()):
             await self._send(c["ws"], payload)
+
+    async def broadcast_theme(self, theme: str) -> None:
+        """Push a fresh theme to everyone connected. Guests + owner apply it
+        to <html data-theme=…> so the UI reskins without a reload."""
+        payload = {"type": "theme", "theme": theme}
+        await self.send_to_host(payload)
+        for c in list(self.clients.values()):
+            await self._send(c["ws"], payload)
+
+    async def toggle_chat_reaction(self, msg_id: str, emoji: str, author: str) -> None:
+        """Toggle `emoji` reaction on chat message `msg_id` for `author`.
+        Broadcast the updated reactions map. Whitelisted emojis only."""
+        if emoji not in self.REACTION_WHITELIST:
+            return
+        if not msg_id or not author:
+            return
+        target = None
+        for m in self.chat_msgs:
+            if m.get("id") == msg_id:
+                target = m
+                break
+        if target is None:
+            return
+        reactions = target.setdefault("reactions", {})
+        authors = reactions.get(emoji, [])
+        if author in authors:
+            authors = [a for a in authors if a != author]
+        else:
+            authors = [*authors, author]
+        if authors:
+            reactions[emoji] = authors
+        else:
+            reactions.pop(emoji, None)
+        payload = {
+            "type": "chat_react",
+            "msg_id": msg_id,
+            "reactions": reactions,
+        }
+        await self.send_to_host(payload)
+        for c in list(self.clients.values()):
+            await self._send(c["ws"], payload)
+
+    async def set_client_nickname(self, cid: str, name: str) -> Optional[str]:
+        """Sanitize + set a guest's nickname. Returns the final label or None
+        if rejected. Broadcasts state + presence so labels update everywhere."""
+        client = self.clients.get(cid)
+        if client is None:
+            return None
+        cleaned = re.sub(r"[^\w \-\.\!\?]", "", (name or "").strip())[:24].strip()
+        if len(cleaned) < 2:
+            return None
+        client["label"] = cleaned
+        client["auto_label"] = False
+        await self.broadcast()
+        await self.broadcast_presence()
+        return cleaned
+
+    # ---- session recap ---------------------------------------------------
+    def _init_stats(self, cid: str) -> None:
+        client = self.clients.get(cid)
+        code = client["code"] if client else ""
+        self.session_stats[cid] = {
+            "reactions": {},
+            "chat_count": 0,
+            "speed_samples": [],
+            "started_at": time.monotonic(),
+            "granted_seconds": self.active_remaining_start,
+            "code": code,
+        }
+
+    def _record_speed_sample(self) -> None:
+        """Log the current speed onto the active guest's recap accumulator.
+        Called from tick() while a turn is running."""
+        cid = self.active_id
+        if not cid:
+            return
+        stats = self.session_stats.get(cid)
+        if stats is None:
+            return
+        stats["speed_samples"].append(int(self.telemetry.get("speed", 0)))
+
+    def _build_recap(self, cid: str) -> dict:
+        stats = self.session_stats.get(cid) or {}
+        samples = stats.get("speed_samples") or []
+        moving = [s for s in samples if s > 0]
+        reactions_by_emoji = stats.get("reactions") or {}
+        top = sorted(reactions_by_emoji.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        elapsed = int(time.monotonic() - stats.get("started_at", time.monotonic()))
+        used = min(elapsed, stats.get("granted_seconds", elapsed))
+        return {
+            "used_seconds": used,
+            "granted_seconds": stats.get("granted_seconds", 0),
+            "chat_count": stats.get("chat_count", 0),
+            "reactions_total": sum(reactions_by_emoji.values()),
+            "reactions_top": [{"emoji": e, "count": c} for e, c in top],
+            "avg_speed_percent": int(sum(moving) / len(moving)) if moving else 0,
+            "peak_speed_percent": max(samples) if samples else 0,
+        }
+
+    async def _emit_recap(self, cid: str, reason: str) -> None:
+        client = self.clients.get(cid)
+        if client is None:
+            return
+        try:
+            recap = self._build_recap(cid)
+            recap["reason"] = reason
+            await self._send(client["ws"], {"type": "session_recap", "recap": recap})
+        except Exception as e:
+            logger.error(f"session_recap emit failed: {e}")
 
     async def mark_typing(self, cid: str) -> None:
         """Record that `cid` (or 'owner') is typing right now, and broadcast
@@ -525,6 +646,7 @@ class Hub:
             self.active_start = time.monotonic()
             self.active_remaining_start = remaining
             self.active_flushed = 0
+            self._init_stats(cid)
             self.reset_telemetry()
             await log_event("session", "guest_active", actor=f"guest:{client['label']}",
                             target=client["code"], detail={"remaining_seconds": remaining})
@@ -546,6 +668,9 @@ class Hub:
                 {"$inc": {"used_seconds": delta},
                  "$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}},
             )
+            # Ship the end-of-turn recap BEFORE we flip the guest into
+            # spectator mode so the card renders while they still have context.
+            await self._emit_recap(cid, reason)
             # When the guest's time runs out, we DON'T disconnect them anymore
             # — they demote to view-only spectators (still see the stream, chat,
             # and presence). For all other reasons the socket stays too; the
@@ -564,6 +689,8 @@ class Hub:
         self.active_start = None
         self.active_remaining_start = 0
         self.active_flushed = 0
+        # Drop the recap accumulator for this turn now that we've emitted it.
+        self.session_stats.pop(cid, None)
         self.reset_telemetry()
         await self.push_telemetry()
 
@@ -658,6 +785,9 @@ class Hub:
             "role": role,
             "text": text,
             "ts": datetime.now(timezone.utc).isoformat(),
+            # Reactions: {emoji: [author_label, …]}. Toggled per-viewer via
+            # the `chat_react` WS event.
+            "reactions": {},
         }
         self.chat_msgs.append(msg)
         if len(self.chat_msgs) > self.CHAT_HISTORY:
@@ -667,6 +797,12 @@ class Hub:
         await self.send_to_host(frame)
         for c in list(self.clients.values()):
             await self._send(c["ws"], frame)
+        # Bump per-session chat count so the recap picks it up.
+        if role == "guest":
+            cid = sender_id[2:] if sender_id.startswith("g:") else sender_id
+            stats = self.session_stats.get(cid)
+            if stats is not None:
+                stats["chat_count"] = stats.get("chat_count", 0) + 1
         return msg
 
     async def handle_guest_chat(self, cid: str, text: str):
@@ -771,6 +907,9 @@ class Hub:
                 elapsed = int(time.monotonic() - self.active_start)
                 if elapsed - self.active_flushed >= self.FLUSH_INTERVAL_S:
                     await self._flush_active_used_seconds()
+            # Snapshot the current speed onto the active guest's recap
+            # accumulator once per tick so we can compute avg/peak later.
+            self._record_speed_sample()
             await self.broadcast()
             await self.push_telemetry()
 
@@ -1093,7 +1232,28 @@ async def load_settings() -> dict:
         "max_depth": compute_toy_max_depth(toy_length_mm, rail_travel_mm),
         "local_url": doc.get("local_url", "") or "",
         "public_url": doc.get("public_url", "") or "",
+        "theme": doc.get("theme", "kink") or "kink",
     }
+
+VALID_THEMES = {"kink", "neon", "dungeon", "moody"}
+
+@api_router.get("/settings/theme")
+async def get_theme():
+    """Public — every guest reads this on connect to render the same skin."""
+    s = await load_settings()
+    return {"theme": s.get("theme", "kink")}
+
+@api_router.put("/settings/theme")
+async def put_theme(body: dict, user: dict = Depends(get_current_user)):
+    theme = str(body.get("theme", "")).strip().lower()
+    if theme not in VALID_THEMES:
+        raise HTTPException(status_code=400, detail=f"theme must be one of {sorted(VALID_THEMES)}")
+    await db.settings.update_one({"_id": "global"}, {"$set": {"theme": theme}}, upsert=True)
+    await log_event("security", "theme_changed", actor=user["email"], detail={"theme": theme})
+    # Push the change to everyone who's already connected so their UI swaps
+    # instantly instead of on next reload.
+    await hub.broadcast_theme(theme)
+    return {"theme": theme}
 
 @api_router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
@@ -1250,6 +1410,10 @@ async def ws_host(ws: WebSocket):
                     await hub.mark_typing("owner")
             elif t == "reaction":
                 await hub.broadcast_reaction(None, str(data.get("emoji", "")))
+            elif t == "chat_react":
+                await hub.toggle_chat_reaction(str(data.get("msg_id", "")),
+                                               str(data.get("emoji", "")),
+                                               "Owner")
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -1313,6 +1477,14 @@ async def ws_control(ws: WebSocket, code: str):
                     await hub.mark_typing(cid)
             elif t == "reaction":
                 await hub.broadcast_reaction(cid, str(data.get("emoji", "")))
+            elif t == "chat_react":
+                client = hub.clients.get(cid)
+                author = "Guest" if not client else ("Guest" if client.get("auto_label") else client["label"])
+                await hub.toggle_chat_reaction(str(data.get("msg_id", "")),
+                                               str(data.get("emoji", "")), author)
+            elif t == "set_nickname":
+                async with hub.lock:
+                    await hub.set_client_nickname(cid, str(data.get("name", "")))
     except WebSocketDisconnect:
         pass
     except Exception:

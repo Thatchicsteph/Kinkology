@@ -8,6 +8,7 @@ import AdminDashboard from "@/pages/AdminDashboard";
 import GuestControl from "@/pages/GuestControl";
 import Overlay from "@/pages/Overlay";
 import Logs from "@/pages/Logs";
+import { ThemeSync } from "@/components/ThemeSync";
 import { Loader2 } from "lucide-react";
 
 function ProtectedRoute({ children }) {
@@ -26,6 +27,7 @@ function ProtectedRoute({ children }) {
 function App() {
   return (
     <AuthProvider>
+      <ThemeSync />
       <Toaster theme="dark" position="top-center" toastOptions={{ style: { background: "#161618", border: "1px solid #222225", color: "#fff", fontFamily: "IBM Plex Sans" } }} />
       <BrowserRouter>
         <Routes>

@@ -17,6 +17,46 @@
   --kink-muted: #6B6572;
 }
 
+/* Room themes — owner picks one, gets pushed via WS to every viewer, applied
+   as <html data-theme="…"> so all --kink-* CSS variables re-resolve without
+   a reload. Kink (default) stays purple/dark. */
+:root[data-theme="neon"] {
+  --kink-base: #08061a;
+  --kink-raised: #14082a;
+  --kink-overlay: #2a1245;
+  --kink-purple: #ff2fd3;
+  --kink-purple-deep: #b400ff;
+  --kink-danger: #ff2e63;
+  --kink-hr: #00e6ff;
+  --kink-text: #f5f0ff;
+  --kink-text-2: #c8b3ff;
+  --kink-muted: #7f74a3;
+}
+:root[data-theme="dungeon"] {
+  --kink-base: #0b0808;
+  --kink-raised: #171010;
+  --kink-overlay: #2e1a1a;
+  --kink-purple: #ff3535;
+  --kink-purple-deep: #a30000;
+  --kink-danger: #ffb800;
+  --kink-hr: #ff5f5f;
+  --kink-text: #f5eded;
+  --kink-text-2: #d8b3b3;
+  --kink-muted: #8a6666;
+}
+:root[data-theme="moody"] {
+  --kink-base: #060a12;
+  --kink-raised: #0d1424;
+  --kink-overlay: #1a253e;
+  --kink-purple: #6f9dff;
+  --kink-purple-deep: #3d5bd6;
+  --kink-danger: #ff5c9c;
+  --kink-hr: #7fd8ff;
+  --kink-text: #eef2ff;
+  --kink-text-2: #b8c4e0;
+  --kink-muted: #6a769a;
+}
+
 @layer base {
   :root {
     --background: 240 6% 4%;

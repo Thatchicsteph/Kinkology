@@ -1,5 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, MessageSquare, Trash2, Users } from "lucide-react";
+import { Send, MessageSquare, Trash2, Users, SmilePlus } from "lucide-react";
+
+/**
+ * Whitelist of allowed chat-message reactions. Kept short so the picker
+ * stays glanceable and the DOM stays cheap.
+ */
+const CHAT_REACTIONS = ["🔥", "💦", "😩", "👏", "😈", "💜"];
 
 /**
  * Realtime chat panel. The parent owns the WebSocket — this component just
@@ -28,9 +34,11 @@ export function ChatPanel({
   title = "CHAT",
   presence = null,
   onTyping,
+  onReact,
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [pickerFor, setPickerFor] = useState(null);
   const scrollRef = useRef(null);
   const lastTypingSentAt = useRef(0);
 
@@ -112,21 +120,88 @@ export function ChatPanel({
             No messages yet. Say something.
           </p>
         ) : (
-          messages.map((m) => (
-            <div key={m.id} data-testid={`chat-msg-${m.id}`} className="text-sm leading-snug">
-              <span
-                className={`font-mono-data text-[10px] tracking-wide uppercase mr-2 ${
-                  m.role === "owner" ? "text-[var(--kink-purple)]" : "text-[var(--kink-text-2)]"
-                }`}
+          messages.map((m) => {
+            const reactions = m.reactions || {};
+            const entries = Object.entries(reactions).filter(([, arr]) => (arr || []).length > 0);
+            const showPicker = pickerFor === m.id;
+            const mineReactedTo = (emoji) => (reactions[emoji] || []).some((a) => a === selfLabel || a === "You");
+            return (
+              <div
+                key={m.id}
+                data-testid={`chat-msg-${m.id}`}
+                className="text-sm leading-snug group"
               >
-                {m.author || (m.role === "owner" ? "Owner" : "Guest")}
-              </span>
-              <span className="font-mono-data text-[10px] text-[var(--kink-muted)] mr-2">
-                {fmt(m.ts)}
-              </span>
-              <span className="text-white break-words">{m.text}</span>
-            </div>
-          ))
+                <span
+                  className={`font-mono-data text-[10px] tracking-wide uppercase mr-2 ${
+                    m.role === "owner" ? "text-[var(--kink-purple)]" : "text-[var(--kink-text-2)]"
+                  }`}
+                >
+                  {m.author || (m.role === "owner" ? "Owner" : "Guest")}
+                </span>
+                <span className="font-mono-data text-[10px] text-[var(--kink-muted)] mr-2">
+                  {fmt(m.ts)}
+                </span>
+                <span className="text-white break-words">{m.text}</span>
+                {onReact && (
+                  <button
+                    type="button"
+                    onClick={() => setPickerFor(showPicker ? null : m.id)}
+                    data-testid={`chat-react-open-${m.id}`}
+                    aria-label="React"
+                    className="ml-1.5 inline-flex align-middle opacity-0 group-hover:opacity-100 focus:opacity-100 text-[var(--kink-muted)] hover:text-[var(--kink-purple)] transition-opacity"
+                  >
+                    <SmilePlus size={12} />
+                  </button>
+                )}
+                {(entries.length > 0 || showPicker) && (
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1 ml-0.5">
+                    {entries.map(([emoji, authors]) => {
+                      const mine = mineReactedTo(emoji);
+                      return (
+                        <button
+                          key={emoji}
+                          type="button"
+                          onClick={() => onReact && onReact(m.id, emoji)}
+                          disabled={!onReact}
+                          data-testid={`chat-react-badge-${m.id}-${emoji}`}
+                          title={authors.join(", ")}
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] border transition-colors ${
+                            mine
+                              ? "border-[var(--kink-purple)] bg-[var(--kink-purple)]/15 text-white"
+                              : "border-[var(--kink-overlay)] hover:border-[var(--kink-purple)]/50 text-[var(--kink-text-2)]"
+                          }`}
+                        >
+                          <span>{emoji}</span>
+                          <span className="font-mono-data text-[10px]">{authors.length}</span>
+                        </button>
+                      );
+                    })}
+                    {showPicker && onReact && (
+                      <div
+                        data-testid={`chat-react-picker-${m.id}`}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-[var(--kink-purple)]/40 bg-[var(--kink-purple)]/10"
+                      >
+                        {CHAT_REACTIONS.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onClick={() => {
+                              onReact(m.id, emoji);
+                              setPickerFor(null);
+                            }}
+                            data-testid={`chat-react-pick-${m.id}-${emoji}`}
+                            className="text-base leading-none active:scale-90 transition-transform"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
 
