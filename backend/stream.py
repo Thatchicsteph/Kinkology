@@ -304,7 +304,11 @@ def _build_ice_link_headers(extra: list) -> List[str]:
         if username or credential:
             parts.append(f'username="{safe_u}"')
             parts.append(f'credential="{safe_c}"')
-            parts.append('credential-type="password"')
+            # NOTE: Do NOT emit `credential-type="password"`. Some WHIP clients
+            # (OBS 32.x libdatachannel) fail to construct the ICE server with
+            # "Invalid ICE server URL: credential-type=..." — they don't
+            # recognise the param and treat it as a bogus URL. The default
+            # credential type is already "password" per RFC 8839.
         entries.append("; ".join(parts))
 
     # Static STUN — same defaults as _ice_servers().
