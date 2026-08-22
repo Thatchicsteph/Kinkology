@@ -586,8 +586,22 @@ async def whep_stop(sid: str) -> dict:
 @router.options("/whip")
 @router.options("/whep")
 async def stream_options() -> Response:
-    # Some WHIP clients (incl. OBS) pre-flight the ingest URL.
-    return Response(status_code=204)
+    """Preflight for WHIP/WHEP clients (incl. OBS). Advertises ICE servers via
+    RFC 8840 Link headers so clients can configure their PeerConnection ICE
+    servers BEFORE the offer/answer round-trip. Without these headers OBS
+    only gathers its private LAN host candidates."""
+    link_values = _build_ice_link_headers(await _current_extra_ice_servers())
+    resp = Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Methods": "POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Expose-Headers": "Location, Link",
+        },
+    )
+    for v in link_values:
+        resp.raw_headers.append((b"link", v.encode("latin-1")))
+    return resp
 
 
 @router.get("/stream/status")
