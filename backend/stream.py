@@ -259,6 +259,18 @@ def _extract_bearer(request: Request) -> str:
     return (request.query_params.get("token") or request.query_params.get("auth") or "").strip()
 
 
+def _absolute_url(request: Request, path: str) -> str:
+    """Build absolute URL for the Location header. Behind a reverse proxy like
+    Caddy, uvicorn sees http:// on the internal hop, so `request.base_url` is
+    wrong for HTTPS deployments. Honor X-Forwarded-Proto / X-Forwarded-Host so
+    OBS's PATCH/DELETE to the returned Location URL don't get 308-redirected
+    (OBS refuses to follow 308 on state-changing methods).
+    """
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
+    return f"{proto}://{host}{path}"
+
+
 async def _current_extra_ice_servers() -> list:
     """Fetch dynamic (Cloudflare) ICE-server dicts for advertising to the client.
     Returns a list of {"urls": [...], "username": "...", "credential": "..."}.
@@ -465,8 +477,10 @@ async def whip_publish(request: Request) -> Response:
     # WHIP spec allows a relative Location, but some clients (incl. some OBS
     # builds) fail silently on relative resource URLs. Return an absolute URL
     # built from the incoming request so it works behind Caddy, ngrok, etc.
-    base = str(request.base_url).rstrip("/")
-    location = f"{base}/api/whip/{sid}"
+    # Honor X-Forwarded-Proto so PATCH/DELETE from OBS don't hit a Caddy 308
+    # HTTPS-redirect (OBS refuses to follow 308 on state-changing methods,
+    # which silently drops every trickle-ICE candidate).
+    location = _absolute_url(request, f"/api/whip/{sid}")
     # Advertise ICE candidates at the exact host the client used to reach us,
     # so OBS on the Mac gets `127.0.0.1` and LAN/remote clients get their host.
     answer_sdp = rewrite_answer_candidates(pc.localDescription.sdp, await _resolve_viewer_host(request))
@@ -598,7 +612,7 @@ async def whep_view(request: Request) -> Response:
         status_code=201,
         media_type="application/sdp",
         headers={
-            "Location": f"{base}/api/whep/{sid}",
+            "Location": _absolute_url(request, f"/api/whep/{sid}"),
             "Access-Control-Expose-Headers": "Location, Link",
         },
     )
