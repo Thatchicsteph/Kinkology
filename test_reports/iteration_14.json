@@ -1,0 +1,44 @@
+{
+  "summary": "Backend-only validation of the FQDN->IPv4 ICE candidate fix in /app/backend/stream.py. NEW SUITE /app/backend/tests/test_whep_host_ip_resolution.py: 12/12 PASS. Confirmed: (a) POST /api/whep with Host: tg30.ddns.net returns 201 and every `a=candidate ... typ host` line now carries the resolved IPv4 literal 90.210.68.208 (regex ^(\\d{1,3}\\.){3}\\d{1,3}$) with the string 'tg30.ddns.net' appearing nowhere in any host candidate; Host: google.com -> 64.233.181.138. (b) Literal passthrough: 192.168.1.42 -> 192.168.1.42, 10.0.0.5:8080 -> 10.0.0.5 (port stripped). (c) localhost / 127.0.0.1 / [::1]:8001 all -> 127.0.0.1 (bracketed IPv6 no longer produces a bogus '['). (d) CRLF PRESERVED: answer.count('\\r\\n') > 0 and answer.count('\\n') == answer.count('\\r\\n') for both /api/whep and /api/whip answers (iteration-13 LF regression is fixed). (e) Unresolvable Host nx.definitely-not-real-example.invalid -> 201, host candidates left untouched at the raw aioice container IP 10.231.154.50, no 400/500. (f) No srflx/relay candidates exist in this env (no STUN configured) so nothing to corrupt; the assertion that non-host lines never contain the Host value passes. (g) POST /api/whip with Host: 192.168.5.5 -> 201, all host candidates 192.168.5.5, CRLF intact. Also verified through the REAL public preview URL (test_whep_external_url.py): the answer a browser receives carries an IP literal (35.190.85.20), never the hostname. Regressions: chat-after-refresh host WS (chat_history + toys_lock within 3s, chat echo, persistence) PASS; /app/tests/test_whip_whep.py PASS (real media frames flow); /app/tests/test_chat_and_lock.py PASS. Full backend suite: 123 passed / 1 failed (pre-existing settings-state leakage, unrelated).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/whip, POST /api/whep (stream.py _resolve_viewer_host)", "issue": "socket.getaddrinfo() is a BLOCKING call executed inside the async request handler, so a slow/hanging DNS resolver stalls the whole event loop (all HTTP + all WebSockets, including the 1 Hz state ticker). The 60 s cache (which also caches None on failure) limits repeats but the first lookup per host is still on the loop. Fix: `await asyncio.get_running_loop().getaddrinfo(...)` (non-blocking) or run_in_executor with a timeout."},
+      {"endpoint": "stream.py rewrite_answer_candidates / _resolve_viewer_host", "issue": "AAAA-only hosts get no rewrite: resolution is hard-coded to AF_INET, so an IPv6-only FQDN falls through to `ip = None` and the raw container candidate is emitted. Acceptable today, but if IPv6-only mobile clients matter, fall back to AF_INET6 and emit the IPv6 literal (candidates would also need the matching address family/typ)."},
+      {"endpoint": "GET /api/settings + /api/session/state", "issue": "PRE-EXISTING (also in iteration 13): backend_test.py::TestSettings::test_put_settings_persists_and_reflects_in_session_state fails because safety-limit settings are shared global mutable state across test modules (max_depth differs from what the test wrote). Needs a settings snapshot/restore fixture."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_whep_host_ip_resolution.py",
+    "/app/backend/tests/test_whep_external_url.py",
+    "/app/backend/tests/test_bugfix_chat_and_whep_host.py",
+    "/app/test_reports/pytest/whep_host_ip.xml",
+    "/app/test_reports/pytest/bugfix14.xml",
+    "/app/test_reports/pytest/full_suite_14.xml"
+  ],
+  "action_items": [
+    "The reported bug's mechanism is FIXED: host ICE candidates are now IP literals, so mobile Chrome/Safari will no longer silently drop them. Nothing further needed for the SDP rewrite itself.",
+    "REMAINING RISK for real mobile playback (not a code bug, a deployment/NAT concern): the emitted candidate is the IP that the Host header resolves to (e.g. tg30.ddns.net -> the user's public/NAT IP), while aiortc binds a RANDOM ephemeral UDP port each session. Unless the router forwards the ENTIRE ephemeral UDP range to the container, ICE will still fail for remote/mobile viewers. Verified in this env: via the public preview URL the candidate is the ingress IP 35.190.85.20, which does not carry the media UDP socket, so playback over the proxy domain still cannot connect. Recommend either (1) pinning aiortc's UDP port range and documenting a single forwarded port, or (2) configuring STUN + a TURN relay (RTCConfiguration iceServers) so srflx/relay candidates exist.",
+    "Make _resolve_viewer_host's DNS lookup non-blocking (loop.getaddrinfo) to protect the event loop.",
+    "Fix the pre-existing TestSettings global-state leakage in backend_test.py."
+  ],
+  "critical_code_review_comments": [
+    "rewrite_answer_candidates now splits/joins on the detected terminator, so CRLF round-trips exactly — verified byte-wise on real answers. Still scoped to `typ host` only and idempotent.",
+    "_resolve_viewer_host correctly handles bracketed IPv6 Host headers and strips ports; returning None on failure (leaving the SDP untouched) is the right fail-safe and is exercised by the .invalid test.",
+    "Negative DNS results are cached as None for 60 s — good for loop protection, but means a host that becomes resolvable is not picked up for up to a minute. Fine, just be aware.",
+    "WHIP/WHEP Location is still built from the client-controlled Host header, so a spoofed Host yields an unusable Location; tests must re-target DELETE at the real origin (they do)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_whep_host_ip_resolution.py (new)",
+    "/app/backend/tests/test_whep_external_url.py (new)",
+    "/app/backend/tests/test_bugfix_chat_and_whep_host.py (updated stale expectation: tg30.ddns.net now expects the resolved IPv4)"
+  ],
+  "success_rate": {"backend": "100% on the fix-focused suites (12/12 new + 1/1 public-URL + 12/12 bugfix + 6/6 stream + 2/2 e2e scripts); 123/124 on the full backend suite (1 pre-existing failure)", "frontend": "not tested (backend-only run as requested)"},
+  "seed_data_creation": "Transient only: synthetic lavfi WHIP publishers (all released; /api/stream/status back to publisher_connected=false), one TEST_ChatGuest access code (deleted), chat cleared, toys unlocked.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@ossm.local / ossm-admin-2026",
+  "context_for_next_testing_agent": "Run `cd /app/backend && python -m pytest tests/test_whep_host_ip_resolution.py -v` (rootdir picks up tests/pytest.ini, asyncio auto mode). The WHIP class must stay LAST in that file because it takes over then releases the publisher slot. If /api/whep returns 409, GET /api/stream/status then DELETE /api/whip/<publisher_id> against localhost (Location headers reflect the spoofed Host). tg30.ddns.net currently resolves to 90.210.68.208 from this container — tests resolve dynamically, so DNS churn is fine. Frontend was not exercised in the browser this run; real media playback from a phone was not (and cannot be) tested here.",
+  "rca_of_the_issue": "Iteration 13's rewrite put the raw Host header (an FQDN like tg30.ddns.net) into `a=candidate ... typ host`; per RFC 8839 ICE agents ignore host candidates whose connection-address is a non-mDNS hostname, so mobile Chrome/Safari discarded every candidate and no video appeared. The new _resolve_viewer_host resolves the Host to an IPv4 literal via socket.getaddrinfo (60 s TTL cache), passes IP literals through untouched, maps localhost/::1 to 127.0.0.1, and returns None (no rewrite) when resolution fails; rewrite_answer_candidates preserves CRLF. All of this is verified. The residual reason mobile video could still fail is transport-level, not SDP-level: aiortc's ephemeral UDP port must actually be reachable at that resolved IP (NAT port-forwarding or TURN)."
+}

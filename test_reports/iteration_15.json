@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 15 — backend-only verification of the non-blocking `_resolve_viewer_host` (asyncio loop.getaddrinfo + wait_for(1.5s)) in /app/backend/stream.py. Wrote 2 new pytest suites (12 HTTP-level + 6 in-process unit tests) and re-ran all prior stream/chat/security regression suites. TOTAL 67/67 pytest tests passed and all 4 /app/tests/*.py scripts exited 0. Key new signal: 5 concurrent POST /api/whep with distinct unresolvable Host headers returned 201 in 0.08s wall-clock (limit 3.5s). Because `.invalid` NXDOMAIN answers instantly, I added a decisive in-process unit test that patches socket.getaddrinfo with a 1.0s sleep: a background ticker coroutine logged 100 iterations during the pending lookup (would be ~0 if blocking), and 5 concurrent 1.0s lookups completed in 1.00s total. The 1.5s asyncio.wait_for timeout is honoured exactly (measured 1.50s -> returns None -> SDP left untouched). No regressions; mobile host-candidate fix holds.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/whep, /api/whip (_resolve_viewer_host)", "issue": "`_host_ip_cache` is never pruned — expired entries are only overwritten on re-lookup of the same key. Any client can send arbitrary Host headers (`a.invalid`, `b.invalid`, ...) and grow the dict unboundedly (slow memory leak / low-grade DoS). Suggest an entry cap (e.g. 256) with prune-on-insert, or functools-style LRU."},
+      {"endpoint": "/api/whep (_resolve_viewer_host)", "issue": "Negative DNS results are cached for the full 60s TTL. A single transient resolver blip for the real deployment FQDN (tg30.ddns.net) will make WHEP answers fall back to the raw aioice IP for a whole minute — i.e. the original mobile bug re-appears for 60s. Recommend a much shorter negative TTL (~5s) than the positive one."},
+      {"endpoint": "/api/whep (_resolve_viewer_host)", "issue": "`asyncio.wait_for` cancels the await but the underlying getaddrinfo keeps running in the default asyncio ThreadPoolExecutor (max_workers = min(32, cpu+4)). Under a burst of slow/black-holed Host lookups, timed-out threads accumulate and can starve every other run_in_executor user. Non-blocking behaviour is verified correct today; this is a load-hardening note only."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_whep_nonblocking_resolver.py",
+    "/app/backend/tests/test_resolver_nonblocking_unit.py",
+    "/app/tests/probe_whep_malformed_sdp.py",
+    "/app/test_reports/pytest/iter15_nonblocking.xml",
+    "/app/test_reports/pytest/iter15_unit.xml",
+    "/app/test_reports/pytest/iter15_regression.xml"
+  ],
+  "action_items": [
+    "OPTIONAL HARDENING ONLY — the mobile WHEP fix is fully verified and no functional bug was found.",
+    "Bound `_host_ip_cache` size (prune expired keys / cap entries) to prevent unbounded growth from attacker-supplied Host headers.",
+    "Use a shorter TTL for negative (None) DNS results than for successful ones so a transient resolver failure does not disable the IPv4 rewrite for 60s.",
+    "Move `import socket as _socket` from inside `_resolve_viewer_host` to module scope (micro-nit; per-call import lock)."
+  ],
+  "critical_code_review_comments": [
+    "stream.py:96 — `_host_ip_cache[host] = (ip, now + _HOST_IP_TTL)` writes unconditionally with no eviction; the dict grows once per distinct Host header ever seen. Add a size cap.",
+    "stream.py:94-96 — the bare `except Exception` caches `None` for the full 60s positive TTL, conflating 'NXDOMAIN' with 'resolver timed out'; a 1.5s timeout on the production FQDN silently degrades the mobile fix for a minute.",
+    "stream.py:37 — `Dict[str, tuple]` should be `Dict[str, Tuple[Optional[str], float]]` for type-check value.",
+    "Verified GOOD: `rewrite_answer_candidates` only touches ` typ host` lines, preserves the detected CRLF terminator, and is a no-op when target_host is None — all confirmed by test."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_whep_nonblocking_resolver.py",
+    "/app/backend/tests/test_resolver_nonblocking_unit.py",
+    "/app/tests/probe_whep_malformed_sdp.py"
+  ],
+  "success_rate": {"backend": "100% (67/67 pytest + 4/4 regression scripts)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "None persisted. Each test spins up a synthetic aiortc WHIP publisher (ffmpeg lavfi color source) and DELETEs /api/whip/<sid> in teardown; /api/stream/status returns to publisher_connected=false after every suite.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Read from /app/memory/test_credentials.md; not needed — WHIP/WHEP endpoints are open (publish_token_required=false) in this environment.",
+  "context_for_next_testing_agent": "Iteration 15 closes the 'video cannot be seen on mobiles' bug chain. Verified per requested case: FQDN tg30.ddns.net -> IPv4 literal with zero FQDN leakage in any `typ host` line; 192.168.1.42 -> 192.168.1.42; 10.0.0.5:8080 -> 10.0.0.5; localhost / 127.0.0.1 / [::1]:8001 -> 127.0.0.1; Host 192.168.5.5 on /api/whip -> all host candidates 192.168.5.5; CRLF preserved (answer.count('\\n') == answer.count('\\r\\n')); unresolvable Host -> 201 with the raw container IP surviving; google.com twice inside TTL -> identical IPv4 (cache hit, 0.03s round-trip); 5 concurrent unresolvable Hosts -> 0.08s. Public-URL path also green via test_whep_external_url.py. Reusable patterns: module-scoped `publisher` fixture + `_clear_publisher()` to avoid 409, and FakeRequest + monkeypatched socket.getaddrinfo for cheap resolver unit tests (call stream._host_ip_cache.clear() between them). Run stream suites with `-p no:randomly` since the WHIP test must go last. Malformed WHEP offers (missing ice-ufrag, garbage, bare 'v=0') all correctly return 400 — the single historical 500 in backend.err.log is stale and no longer reproducible. Frontend/UI of the mobile player was NOT exercised (backend-only scope); a real mobile-browser playback check is the only remaining unverified layer.",
+  "rca_of_the_issue": "Original bug: aiortc/aioice emitted `a=candidate: ... typ host` lines, and the previous fix substituted the raw Host header into them. When that header was an FQDN (tg30.ddns.net), mobile browsers silently discarded the candidate (RFC 8839 requires an IP literal or an mDNS .local name), so ICE never completed and no video appeared. Fix chain: iteration 14 resolved the FQDN to an IPv4 literal before rewriting; iteration 15 (this one) removed the blocking `socket.getaddrinfo` call from the async handler in favour of `await asyncio.wait_for(loop.getaddrinfo(...), 1.5)` plus a 60s TTL cache. Verified non-blocking by instrumenting the event loop with a ticker coroutine against a synthetically slowed resolver (100 ticks during a 1.0s lookup) and by measuring 5 parallel 1.0s lookups at 1.00s aggregate. No mitigation outstanding; only the cache-hygiene hardening notes above remain."
+}

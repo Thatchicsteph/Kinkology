@@ -32,6 +32,111 @@ from stream_patch import rewrite_incoming_sdp
 
 logger = logging.getLogger("ossm-bridge.stream")
 
+# Small TTL cache so we don't resolve the same Host header on every WHEP call.
+# Value is (ip, expires_at); positive TTL 60s, negative TTL 5s so a transient
+# resolver blip on our real deployment FQDN doesn't disable the IPv4 rewrite
+# for a whole minute. Cache is capped to protect against attacker-supplied
+# Host headers filling memory (see minor findings in iteration_15 report).
+_host_ip_cache: Dict[str, tuple] = {}
+_HOST_IP_TTL = 60.0
+_HOST_IP_NEG_TTL = 5.0
+_HOST_IP_CACHE_MAX = 256
+
+
+def _cache_put(host: str, ip: Optional[str], now: float) -> None:
+    ttl = _HOST_IP_TTL if ip else _HOST_IP_NEG_TTL
+    if len(_host_ip_cache) >= _HOST_IP_CACHE_MAX:
+        # Cheap eviction: drop all expired entries; if still full, drop oldest.
+        expired = [k for k, (_ip, exp) in _host_ip_cache.items() if exp <= now]
+        for k in expired:
+            _host_ip_cache.pop(k, None)
+        if len(_host_ip_cache) >= _HOST_IP_CACHE_MAX:
+            oldest = min(_host_ip_cache.items(), key=lambda kv: kv[1][1])[0]
+            _host_ip_cache.pop(oldest, None)
+    _host_ip_cache[host] = (ip, now + ttl)
+
+
+def _looks_like_ipv4(s: str) -> bool:
+    if not s or s.count(".") != 3:
+        return False
+    try:
+        return all(0 <= int(p) <= 255 for p in s.split("."))
+    except ValueError:
+        return False
+
+
+async def _resolve_viewer_host(request: Request) -> Optional[str]:
+    """Pick the ICE-candidate host address for THIS viewer.
+
+    Browsers only accept `typ host` candidates whose connection-address is an
+    IP literal (RFC 8839 / draft-ietf-mmusic-mdns-ice-candidates); an FQDN like
+    `tg30.ddns.net` is silently dropped, which is exactly the mobile-video
+    breakage we hit. So:
+
+      * If the Host header is an IPv4 literal (`192.168.1.42`), return it.
+      * If it's `localhost` / `127.0.0.1`, return `127.0.0.1`.
+      * If it's a domain, resolve it to an IPv4 with a short TTL cache
+        (via loop.getaddrinfo so we don't stall other requests).
+      * If resolution fails, return None so `rewrite_answer_candidates` leaves
+        the answer SDP untouched (aioice's advertised IP wins).
+    """
+    raw = request.headers.get("host", "").strip()
+    if not raw:
+        return None
+    # Strip port. Handles IPv6 bracket form `[::1]:8001` too.
+    if raw.startswith("["):
+        end = raw.find("]")
+        host = raw[1:end] if end > 0 else raw
+    else:
+        host = raw.split(":", 1)[0]
+    host = host.strip().lower()
+    if not host:
+        return None
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return "127.0.0.1"
+    if _looks_like_ipv4(host):
+        return host
+    # Cached async DNS lookup — never blocks the event loop.
+    now = time.time()
+    cached = _host_ip_cache.get(host)
+    if cached and cached[1] > now:
+        return cached[0]
+    try:
+        import socket as _socket
+        loop = asyncio.get_running_loop()
+        infos = await asyncio.wait_for(
+            loop.getaddrinfo(host, None, family=_socket.AF_INET, type=_socket.SOCK_DGRAM),
+            timeout=1.5,
+        )
+        ip = infos[0][4][0] if infos else None
+    except Exception:  # noqa: BLE001
+        ip = None
+    _cache_put(host, ip, now)
+    return ip
+
+
+def rewrite_answer_candidates(sdp: str, target_host: Optional[str]) -> str:
+    """Rewrite every `a=candidate: ... typ host` line to advertise `target_host`.
+
+    Only touches HOST candidates — leaves srflx / relay lines alone so their
+    `raddr` and remote-transport hints stay intact. Preserves the original
+    line-ending style (CRLF vs LF) since RFC 4566 mandates CRLF and strict
+    SDP parsers reject LF-terminated lines. Idempotent; safe with
+    `target_host=None` (returns SDP unchanged).
+    """
+    if not target_host:
+        return sdp
+    # Detect the terminator so we round-trip CRLF vs LF exactly.
+    eol = "\r\n" if "\r\n" in sdp else "\n"
+    parts = sdp.split(eol)
+    for i, line in enumerate(parts):
+        if line.startswith("a=candidate:") and " typ host" in line:
+            fields = line.split(" ", 6)
+            if len(fields) >= 6:
+                fields[4] = target_host
+                parts[i] = " ".join(fields)
+    return eol.join(parts)
+
 # One MediaRelay is shared so a single publisher track can be subscribed to
 # by any number of viewer peer connections without decode duplication.
 _relay = MediaRelay()
@@ -213,10 +318,13 @@ async def whip_publish(request: Request) -> Response:
     # built from the incoming request so it works behind Caddy, ngrok, etc.
     base = str(request.base_url).rstrip("/")
     location = f"{base}/api/whip/{sid}"
+    # Advertise ICE candidates at the exact host the client used to reach us,
+    # so OBS on the Mac gets `127.0.0.1` and LAN/remote clients get their host.
+    answer_sdp = rewrite_answer_candidates(pc.localDescription.sdp, await _resolve_viewer_host(request))
     logger.info("WHIP publisher %s ready — Location=%s", sid, location)
 
     return Response(
-        content=pc.localDescription.sdp,
+        content=answer_sdp,
         status_code=201,
         media_type="application/sdp",
         headers={
@@ -289,8 +397,9 @@ async def whep_view(request: Request) -> Response:
         raise HTTPException(status_code=400, detail=f"Invalid SDP offer: {e}") from e
 
     base = str(request.base_url).rstrip("/")
+    answer_sdp = rewrite_answer_candidates(pc.localDescription.sdp, await _resolve_viewer_host(request))
     return Response(
-        content=pc.localDescription.sdp,
+        content=answer_sdp,
         status_code=201,
         media_type="application/sdp",
         headers={

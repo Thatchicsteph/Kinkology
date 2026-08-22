@@ -1,0 +1,44 @@
+{
+  "summary": "Backend-only verification of the two user-reported bugs. (1) CHAT-AFTER-REFRESH: owner host WS (ws://localhost:8001/api/ws/host?token=<jwt>) delivers `toys_lock` + `chat_history` within ~10ms of connect with NOTHING else connected (no BLE, no toys, no guest), and `{type:'chat'}` from the owner is echoed back as `chat_msg` with author=Owner/role=owner and fanned out to a connected guest + persisted into chat_history on reconnect. VERIFIED FIXED. (2) WHIP/WHEP SDP HOST REWRITE: with a live aiortc publisher, POST /api/whep with Host: 192.168.99.99 / localhost / tg30.ddns.net / 192.168.1.42:8080 returns 201 and every `a=candidate ... typ host` line carries 192.168.99.99 / 127.0.0.1 / tg30.ddns.net / 192.168.1.42 respectively; non-host (srflx) candidates untouched; WHIP with Host: 10.10.10.10 also returns 201 with rewritten host candidates. Mechanically CORRECT — but see two real caveats below (FQDN candidates + CRLF stripping). Regression: /app/tests/test_chat_and_lock.py, test_whip_whep.py (real media frames flow end-to-end), test_toy_relay.py, test_whip_auth.py all PASS. Full pytest suite: 108 passed / 3 failed (all pre-existing, unrelated).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/whip, POST /api/whep (stream.py rewrite_answer_candidates)", "issue": "The rewrite converts the whole SDP answer from CRLF to LF. Verified: offer had 47 CRLF, answer has 0 CRLF / 47 LF. RFC 4566 mandates CRLF line endings; aiortc and most browsers tolerate LF but strict SDP parsers (some OBS/WHIP client builds, some mobile stacks) can reject it. Fix: split/join on the original separator, e.g. `sdp.split('\\r\\n')` + `'\\r\\n'.join(...)` or splitlines(keepends=True) preserving each line's terminator."},
+      {"endpoint": "stream.py _resolve_viewer_host", "issue": "`host.split(':')[0]` breaks for an IPv6 literal Host header (`[::1]:8001` -> `[`), which would emit an invalid candidate address. Guard for bracketed IPv6 hosts (or bail out and return None)."},
+      {"endpoint": "GET /api/settings + /api/session/state", "issue": "PRE-EXISTING (not caused by these fixes): backend_test.py::TestSettings::test_put_settings_persists_and_reflects_in_session_state fails because safety-limit settings are global mutable state shared with other test modules (min_depth/max_speed differ from what the test wrote). Needs per-test isolation or a settings snapshot/restore fixture."},
+      {"endpoint": "POST /api/auth/login, POST /api/access (lockout)", "issue": "PRE-EXISTING/flaky: lockout tests that go through the EXTERNAL preview URL intermittently see 401/400 on the 6th attempt instead of 429 (test_lockout::Test2FALoginLockout::test_5, test_security_hardening::TestAccessLockout::test_3). Verified via localhost that lockout DOES work (attempts 1-5 = 401, 6-7 = 429), so the counter identifier (email+client IP) is likely diluted by the ingress/CDN presenting varying client IPs. Consider using X-Forwarded-For consistently, and/or make those tests localhost-only."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_bugfix_chat_and_whep_host.py",
+    "/app/test_reports/pytest/bugfix_chat_whep.xml",
+    "/app/test_reports/pytest/full_suite.xml",
+    "/app/tests/probe_hostws.py"
+  ],
+  "action_items": [
+    "MOBILE-VIDEO CAVEAT (highest value follow-up): rewriting host candidates to a DNS NAME (e.g. tg30.ddns.net) is very likely to NOT fix remote/mobile playback. Per draft-ietf-mmusic-mdns-ice-candidates / RFC 8839 practice, ICE agents must ignore incoming candidates whose connection-address is an unrecognized FQDN (only mDNS `.local` names are handled); Chrome/Safari will drop `typ host` candidates that are hostnames. Resolve the Host header to an IPv4/IPv6 literal (socket.getaddrinfo, cached with a short TTL) and write THAT into the candidate; pass through literal IPs unchanged, and return None (no rewrite) if resolution fails. LAN-IP access (192.168.x.x) is already correct.",
+    "Preserve CRLF line endings in rewrite_answer_candidates (currently normalizes to LF).",
+    "Handle bracketed IPv6 Host headers in _resolve_viewer_host.",
+    "Fix the pre-existing settings-state leakage in backend_test.py::TestSettings and the external-URL lockout test flakiness (both unrelated to this iteration's fixes)."
+  ],
+  "critical_code_review_comments": [
+    "rewrite_answer_candidates is idempotent and correctly scoped to `typ host` lines only (srflx/raddr untouched, asserted by test_srflx_candidates_untouched) — logic is right; only the line-ending normalization and FQDN-vs-IP semantics are concerns.",
+    "ws_host now unconditionally pushes toys_lock + chat_history right after accept() (server.py ~998) — this is the correct fix for chat-after-refresh; nothing gates it on BLE/toys anymore.",
+    "The 1 Hz ticker_loop broadcasts a `state` frame to the owner WS forever. Any test that 'drains until silence' on the host socket will hang — this bit the pre-existing drain loop in the bug-fix test file (fixed to be deadline-bounded). Consider only broadcasting on change to cut idle chatter.",
+    "WHIP/WHEP `Location` is an absolute URL derived from the (client-controlled) Host header, so a spoofed Host makes the Location unresolvable and the resource undeletable by the client. Acceptable for this app, but the DELETE path must stay reachable via the real origin (tests now re-target it)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_bugfix_chat_and_whep_host.py",
+    "/app/backend/tests/test_stream_whip_whep.py",
+    "/app/backend/tests/test_hr_websocket.py",
+    "/app/tests/probe_hostws.py"
+  ],
+  "success_rate": {"backend": "100% (12/12 on the bug-fix suite; 4/4 on /app/tests e2e scripts; 108/111 on the full backend suite, 3 pre-existing failures)", "frontend": "not tested (backend-only run as requested)"},
+  "seed_data_creation": "Transient only: one access code (TEST_ChatGuest, deleted), chat cleared, toys unlocked, login_attempts collection emptied after lockout probing. Stream hub left idle (publisher_connected=false).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@ossm.local / ossm-admin-2026",
+  "context_for_next_testing_agent": "Run `cd /app/backend && python -m pytest tests/test_bugfix_chat_and_whep_host.py -v` (rootdir picks up tests/pytest.ini, asyncio auto mode, serial). Ordering matters in TestWhepHostRewrite: test_whip_answer_rewrites_host_candidates must stay LAST in that class because it takes over and then releases the publisher slot (otherwise later WHEP calls get 409). Never drain the host WS 'until silence' — the hub pushes a `state` frame every second; use a deadline. If /api/whep returns 409, check GET /api/stream/status and DELETE /api/whip/<publisher_id> against localhost (Location headers may point at a spoofed Host). Frontend AdminDashboard refresh-chat behaviour was NOT exercised in the browser this run.",
+  "rca_of_the_issue": "Bug 1 (chat dead after /admin refresh): ws_host now sends toys_lock + chat_history immediately on accept and handles {type:'chat'} with no BLE/toys precondition, and AdminDashboard opens the host WS unconditionally on mount — verified at the protocol layer (owner chat echoes and persists with zero other peers connected). Bug 2 (mobile video): host ICE candidates in the SDP answer are now rewritten to the request's Host header, which fixes the 127.0.0.1-only case for LAN-IP access; however for domain-based access the candidate becomes an FQDN, which browsers are specified to ignore, so remote/DDNS mobile playback probably still fails until the host is resolved to an IP literal. Side effect found: the rewrite drops CRLF line endings from the answer SDP."
+}

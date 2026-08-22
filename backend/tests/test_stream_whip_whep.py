@@ -26,6 +26,14 @@ def get_status():
     return r.json()
 
 
+def _resource_url(loc: str) -> str:
+    """WHIP/WHEP Location is an ABSOLUTE url built from the request Host, which
+    may not be resolvable from the test runner. Re-target it at BASE_URL."""
+    path = loc.split("://", 1)[-1]
+    path = path[path.index("/"):] if "/" in path else loc
+    return f"{BASE_URL}{path}"
+
+
 async def make_publisher():
     pc = RTCPeerConnection()
     player = MediaPlayer(
@@ -109,7 +117,7 @@ def test_full_whip_whep_flow():
     async def flow():
         pub, loc, resp = await make_publisher()
         try:
-            assert loc.startswith("/api/whip/"), loc
+            assert "/api/whip/" in loc, loc  # Location is now an absolute URL by design
             assert resp.headers.get("content-type", "").startswith("application/sdp")
             assert "v=0" in resp.text
             await asyncio.sleep(3)
@@ -120,21 +128,21 @@ def test_full_whip_whep_flow():
 
             view, vresp, got_track, got_frames = await make_viewer()
             vloc = vresp.headers.get("Location", "")
-            assert vloc.startswith("/api/whep/"), vloc
+            assert "/api/whep/" in vloc, vloc  # absolute URL by design
             await asyncio.wait_for(got_track.wait(), timeout=15)
             await asyncio.wait_for(got_frames.wait(), timeout=30)
 
             st = get_status()
             assert st["viewer_count"] >= 1, st
 
-            d = requests.delete(f"{BASE_URL}{vloc}", timeout=20)
+            d = requests.delete(_resource_url(vloc), timeout=20)
             assert d.status_code == 200, d.text
             assert d.json() == {"ok": True}
             await view.close()
             await asyncio.sleep(1)
             assert get_status()["viewer_count"] == 0, get_status()
         finally:
-            requests.delete(f"{BASE_URL}{loc}", timeout=20)
+            requests.delete(_resource_url(loc), timeout=20)
             await pub.close()
 
         await asyncio.sleep(1)
@@ -160,7 +168,7 @@ def test_second_publisher_replaces_first():
             assert st["publisher_connected"] is True, st
             assert st["publisher_id"] == loc2.rsplit("/", 1)[-1], f"publisher not replaced: {st}"
         finally:
-            requests.delete(f"{BASE_URL}{loc2}", timeout=20)
+            requests.delete(_resource_url(loc2), timeout=20)
             await pub1.close()
             await pub2.close()
         await asyncio.sleep(1)

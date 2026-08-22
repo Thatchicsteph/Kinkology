@@ -124,17 +124,16 @@ export default function AdminDashboard() {
     // eslint-disable-next-line
   }, []);
 
-  // The host relay session (used to forward guest/owner commands) should be
-  // open whenever either an OSSM is connected or toys are connected/synced —
-  // not only when an OSSM is present. This lets guests run toys-only sessions.
+  // The host relay session (used to forward guest/owner commands + chat + toys
+  // lock state) needs to be open the entire time the admin page is mounted —
+  // chat + kill switch don't require an OSSM or toys to be present, and BLE
+  // requires a user gesture to reconnect after refresh which we can't do
+  // automatically.
   useEffect(() => {
-    if (ble.connected || toys.connected) {
-      ble.openHostWs();
-    } else {
-      ble.closeHostWs();
-    }
+    ble.openHostWs();
+    return () => { ble.closeHostWs(); };
     // eslint-disable-next-line
-  }, [ble.connected, toys.connected]);
+  }, []);
 
   const createCode = async (e) => {
     e.preventDefault();

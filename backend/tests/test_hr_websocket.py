@@ -6,7 +6,13 @@ import pytest
 import requests
 import websockets
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+from dotenv import dotenv_values
+
+_env = dotenv_values("/app/frontend/.env")
+_base = os.environ.get("REACT_APP_BACKEND_URL") or _env.get("REACT_APP_BACKEND_URL")
+if not _base:
+    raise RuntimeError("REACT_APP_BACKEND_URL missing from env and /app/frontend/.env")
+BASE_URL = _base.rstrip("/")
 WS_BASE = BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
 
 ADMIN_EMAIL = "admin@ossm.local"
@@ -54,7 +60,7 @@ def test_ws_hr_rejects_without_token():
             return e.code
         except Exception as e:
             return f"err:{type(e).__name__}:{e}"
-    code = asyncio.get_event_loop().run_until_complete(run())
+    code = asyncio.run(run())
     # Accept anything indicating rejection (4401 or connection failure)
     assert code in (4401, 1006) or (isinstance(code, str) and "err" in code) or code == "closed-cleanly" and False, \
         f"Expected close code 4401, got {code}"
@@ -71,7 +77,7 @@ def test_ws_hr_rejects_bad_token():
         except Exception as e:
             return f"err:{type(e).__name__}"
         return None
-    code = asyncio.get_event_loop().run_until_complete(run())
+    code = asyncio.run(run())
     assert code == 4401 or (isinstance(code, str) and "err" in code), f"unexpected: {code}"
 
 
@@ -101,7 +107,7 @@ def test_ws_hr_authenticated_updates_telemetry(admin_token):
             st_off = get_state()
             return st1, st2, st_high, st_neg, st_off
 
-    st1, st2, st_high, st_neg, st_off = asyncio.get_event_loop().run_until_complete(run())
+    st1, st2, st_high, st_neg, st_off = asyncio.run(run())
     assert st1["hr_bpm"] == 72 and st1["hr_connected"] is True, st1
     assert st2["hr_bpm"] == 145, st2
     assert st_high["hr_bpm"] == 300, st_high
@@ -119,7 +125,7 @@ def test_ws_hr_disconnect_resets(admin_token):
         await asyncio.sleep(0.8)
         st_after = get_state()
         return st_on, st_after
-    st_on, st_after = asyncio.get_event_loop().run_until_complete(run())
+    st_on, st_after = asyncio.run(run())
     assert st_on["hr_bpm"] == 88 and st_on["hr_connected"] is True
     assert st_after["hr_bpm"] == 0 and st_after["hr_connected"] is False
 
@@ -134,7 +140,7 @@ def test_overlay_ws_receives_hr_frame(admin_token):
                 # First frame should include current state
                 msg = await asyncio.wait_for(ov.recv(), timeout=5)
                 return json.loads(msg)
-    frame = asyncio.get_event_loop().run_until_complete(run())
+    frame = asyncio.run(run())
     assert "hr_bpm" in frame and "hr_connected" in frame
     assert frame["hr_bpm"] == 111
     assert frame["hr_connected"] is True

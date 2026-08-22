@@ -64,8 +64,20 @@ export function ObsStream({ compact = false }) {
     const stream = new MediaStream();
     pc.ontrack = (ev) => {
       stream.addTrack(ev.track);
-      if (videoRef.current && videoRef.current.srcObject !== stream) {
-        videoRef.current.srcObject = stream;
+      const el = videoRef.current;
+      if (el && el.srcObject !== stream) {
+        el.srcObject = stream;
+        // iOS Safari refuses to autoplay a media element that receives its
+        // srcObject after mount unless we explicitly kick .play(). It also
+        // requires muted=true at play time — enforce it directly on the DOM
+        // node in case the React prop hasn't flushed yet.
+        el.muted = true;
+        el.setAttribute("playsinline", "");
+        el.playsInline = true;
+        const p = el.play();
+        if (p && typeof p.catch === "function") {
+          p.catch(() => {/* autoplay blocked, viewer needs to tap */});
+        }
       }
       setState("live");
     };
@@ -120,7 +132,9 @@ export function ObsStream({ compact = false }) {
 
   const toggleMute = () => {
     setMuted((m) => {
-      if (videoRef.current) videoRef.current.muted = !m;
+      const el = videoRef.current;
+      if (el) el.muted = !m ? true : false;
+      // ^ inversion: new muted state = !current-muted
       return !m;
     });
   };
@@ -165,7 +179,8 @@ export function ObsStream({ compact = false }) {
           data-testid="obs-stream-video"
           autoPlay
           playsInline
-          muted={muted}
+          webkit-playsinline="true"
+          muted
           className="w-full h-full object-contain"
         />
         {!live && (
