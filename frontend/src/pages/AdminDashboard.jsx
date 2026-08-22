@@ -12,6 +12,7 @@ import { RecentActivity } from "@/components/RecentActivity";
 import { HeartRateSync } from "@/components/HeartRateSync";
 import { ToysPanel } from "@/components/ToysPanel";
 import { ObsStream, ObsStreamSetup } from "@/components/ObsStream";
+import { BrowserPublisher } from "@/components/BrowserPublisher";
 import { CloudflareTurnCard } from "@/components/CloudflareTurnCard";
 import { ChatPanel } from "@/components/ChatPanel";
 import { fmtTime } from "@/lib/api";
@@ -304,6 +305,7 @@ export default function AdminDashboard() {
 
         {/* Access codes */}
         <section className="space-y-6">
+          <BrowserPublisher />
           <ObsStreamSetup localUrl={urls.local_url} />
           <CloudflareTurnCard />
           <div className="hud-panel p-5 sm:p-6" data-testid="overlay-link-card">
